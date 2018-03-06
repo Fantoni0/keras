@@ -1276,20 +1276,25 @@ class WeightedMerge(Layer):
                 assert s1 == s2 or s1 is None or s2 is None, 'The shapes of some input tensors do not match ' \
                                                              '(' + str(input_shape[i]) + ' vs ' + str(s) + ').'
         # Initialize weights
-        self.lambdas = self.init((len(input_shape),), name='{}_lambdas'.format(self.name))
+        #self.lambdas = self.init((len(input_shape),)) #, name='{}_lambdas'.format(self.name)
         # Set weights to trainable
-        self.trainable_weights = [self.lambdas]
+        #self.trainable_weights = [self.lambdas]
         # List of regularizers
-        self.regularizers = []
+        #self.regularizers = []
+
+        self.lambdas = self.add_weight(shape=(len(input_shape),),
+                                       initializer=self.init,
+                                       name='lambdas_weighted_merge',
+                                       regularizer=self.lambdas_regularizer)
 
         # Add lambdas regularizers (if necessary)
-        if self.lambdas_regularizer:
-            self.lambdas_regularizer.set_param(self.lambdas)
-            self.regularizers.append(self.lambdas_regularizer)
+        #if self.lambdas_regularizer:
+        #    self.lambdas_regularizer.set_param(self.lambdas)
+        #    self.regularizers.append(self.lambdas_regularizer)
         # Set initial weights (if necessary)
-        if self.initial_weights is not None:
-            self.set_weights(self.initial_weights)
-            del self.initial_weights
+        #if self.initial_weights is not None:
+        #    self.set_weights(self.initial_weights)
+        #    del self.initial_weights
 
     def call(self, x, mask=None):
         if not isinstance(x, list):
@@ -1322,8 +1327,8 @@ class WeightedMerge(Layer):
 
     def get_config(self):
         config = {'mode': self.mode,
-                  'kernel_initializer': self.init.__name__,
-                  'lambdas_regularizer': self.lambdas_regularizer.get_config() if self.lambdas_regularizer else None}
+                  'kernel_initializer': initializers.serialize(self.init),
+                  'lambdas_regularizer': regularizers.serialize(self.lambdas_regularizer)}
         base_config = super(WeightedMerge, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 

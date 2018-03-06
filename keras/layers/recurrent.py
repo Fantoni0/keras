@@ -7882,13 +7882,13 @@ class AttConditionalLSTMCond2Inputs(Recurrent):
         self.attention_recurrent_regularizer = regularizers.get(attention_recurrent_regularizer)
         self.bias_ba_regularizer = regularizers.get(bias_ba_regularizer)
         self.bias_ca_regularizer = regularizers.get(bias_ca_regularizer)
-        if self.attend_on_both:
-            # attention model 2 learnable params
-            self.attention_context_wa_regularizer2 = regularizers.get(attention_context_wa_regularizer2)
-            self.attention_context_regularizer2 = regularizers.get(attention_context_regularizer2)
-            self.attention_recurrent_regularizer2 = regularizers.get(attention_recurrent_regularizer2)
-            self.bias_ba_regularizer2 = regularizers.get(bias_ba_regularizer2)
-            self.bias_ca_regularizer2 = regularizers.get(bias_ca_regularizer2)
+
+        # If self.attend_on_both
+        self.attention_context_wa_regularizer2 = regularizers.get(attention_context_wa_regularizer2) if self.attend_on_both else None
+        self.attention_context_regularizer2 = regularizers.get(attention_context_regularizer2) if self.attend_on_both else None
+        self.attention_recurrent_regularizer2 = regularizers.get(attention_recurrent_regularizer2) if self.attend_on_both else None
+        self.bias_ba_regularizer2 = regularizers.get(bias_ba_regularizer2) if self.attend_on_both else None
+        self.bias_ca_regularizer2 = regularizers.get(bias_ca_regularizer2) if self.attend_on_both else None
 
         # Constraints
         self.kernel_constraint = constraints.get(kernel_constraint)
