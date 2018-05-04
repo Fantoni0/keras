@@ -17,7 +17,7 @@ import warnings
 from ..engine import InputSpec, Layer
 from ..utils import conv_utils
 from ..legacy import interfaces
-from ..legacy.layers import Recurrent, ConvRecurrent2D
+#from ..legacy.layers import Recurrent, ConvRecurrent2D
 from .recurrent import RNN
 from ..utils.generic_utils import has_arg
 

@@ -23,6 +23,8 @@ from ..utils.generic_utils import Progbar
 from .. import callbacks as cbks
 from ..legacy import interfaces
 
+np.set_printoptions(threshold=np.nan)
+
 
 def _standardize_input_data(data, names, shapes=None,
                             check_batch_axis=True,
@@ -57,7 +59,6 @@ def _standardize_input_data(data, names, shapes=None,
         return []
     if data is None:
         return [None for _ in range(len(names))]
-
     if isinstance(data, dict):
         try:
             data = [data[x].values if data[x].__class__.__name__ == 'DataFrame' else data[x] for x in names]
@@ -731,7 +732,6 @@ class Model(Container):
                 else:
                     skip_target_weighing_indices.append(i)
                 self.targets.append(target)
-
         # Prepare sample weights.
         sample_weights = []
         sample_weight_modes = []
@@ -978,7 +978,7 @@ class Model(Container):
         if not hasattr(self, 'train_function'):
             raise RuntimeError('You must compile your model before using it.')
         self._check_trainable_weights_consistency()
-        if self.train_function is None:
+        if self.train_function is None:            
             inputs = self._feed_inputs + self._feed_targets + self._feed_sample_weights
             if self.uses_learning_phase and not isinstance(K.learning_phase(), int):
                 inputs += [K.learning_phase()]
@@ -2300,9 +2300,14 @@ class Model(Container):
 
                     if len(generator_output) == 2:
                         x, y = generator_output
+                        # print("X_GEN_OUT= ", x)
+                        # print("Y_GEN_OUT= ", y)
                         sample_weight = None
                     elif len(generator_output) == 3:
                         x, y, sample_weight = generator_output
+                        # print("X_GEN_OUT= ", x)
+                        # print("Y_GEN_OUT= ", y)
+                        # print("Sample_weight= ", sample_weight)
                     else:
                         raise ValueError('Output of generator should be '
                                          'a tuple `(x, y, sample_weight)` '
@@ -2319,7 +2324,6 @@ class Model(Container):
                     batch_logs['batch'] = batch_index
                     batch_logs['size'] = batch_size
                     callbacks.on_batch_begin(batch_index, batch_logs)
-
                     outs = self.train_on_batch(x, y,
                                                sample_weight=sample_weight,
                                                class_weight=class_weight)

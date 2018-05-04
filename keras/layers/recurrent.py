@@ -8288,7 +8288,7 @@ class AttConditionalLSTMCond2Inputs(Recurrent):
             dim_x_att = (input_shape[0][0], input_shape[0][1], self.context1_dim)
             dim_alpha_att = (input_shape[0][0], input_shape[0][1], input_shape[1][1])
             dim_x_att2 = (input_shape[0][0], input_shape[0][1], self.context2_dim)
-            dim_alpha_att2 = (input_git config --global user.email thisisnothate@gmail.comshape[0][0], input_shape[0][1], input_shape[2][1])
+            dim_alpha_att2 = (input_shape[0][0], input_shape[0][1], input_shape[2][1])
             main_out = [main_out, dim_x_att, dim_alpha_att, dim_x_att2, dim_alpha_att2]
 
         if self.return_states:
@@ -8467,6 +8467,7 @@ class AttConditionalLSTMCond2Inputs(Recurrent):
         ctx_1, alphas1 = compute_attention(h_, pctx_1, context1, att_dp_mask, self.attention_recurrent_kernel,
                                          self.attention_context_wa, self.bias_ca, mask_context1,
                                          attention_mode=self.attention_mode)
+
 
         if self.attend_on_both:
             ctx_2, alphas2 = compute_attention(h_, pctx_2, context2, att_dp_mask2, self.attention_recurrent_kernel2,
