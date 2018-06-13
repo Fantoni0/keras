@@ -6,11 +6,13 @@ from __future__ import division
 from __future__ import print_function
 
 import copy
-from ..engine import Layer
-from ..engine import InputSpec
-from ..engine.topology import _object_list_uid
+from ..engine.base_layer import Layer
+from ..engine.base_layer import InputSpec
 from ..utils.generic_utils import has_arg
+from ..utils.generic_utils import object_list_uid
 from .. import backend as K
+
+from . import recurrent
 
 
 class Wrapper(Layer):
@@ -69,7 +71,7 @@ class Wrapper(Layer):
         # get the updates from the inner layer.
         inner_inputs = inputs
         if inputs is not None:
-            uid = _object_list_uid(inputs)
+            uid = object_list_uid(inputs)
             if uid in self._input_map:
                 inner_inputs = self._input_map[uid]
 
@@ -204,7 +206,7 @@ class TimeDistributed(Wrapper):
                 input_length = K.shape(inputs)[1]
             # Shape: (num_samples * timesteps, ...). And track the
             # transformation in self._input_map.
-            input_uid = _object_list_uid(inputs)
+            input_uid = object_list_uid(inputs)
             inputs = K.reshape(inputs, (-1,) + input_shape[2:])
             self._input_map[input_uid] = inputs
             # (num_samples * timesteps, ...)
@@ -224,6 +226,70 @@ class TimeDistributed(Wrapper):
         if uses_learning_phase:
             y._uses_learning_phase = True
         return y
+
+    # def compute_mask(self, inputs, mask=None):
+    #     """Computes an output mask tensor for Embedding layer
+    #     based on the inputs, mask, and the inner layer.
+    #
+    #     If batch size is specified:
+    #     Simply return the input `mask`. (An rnn-based implementation with
+    #     more than one rnn inputs is required but not supported in Keras yet.)
+    #
+    #     Otherwise we call `compute_mask` of the inner layer at each time step.
+    #     If the output mask at each time step is not `None`:
+    #     (E.g., inner layer is Masking or RNN)
+    #     Concatenate all of them and return the concatenation.
+    #     If the output mask at each time step is `None` and the input mask is not `None`:
+    #     (E.g., inner layer is Dense)
+    #     Reduce the input_mask to 2 dimensions and return it.
+    #     Otherwise (both the output mask and the input mask are `None`):
+    #     (E.g., `mask` is not used at all)
+    #     Return `None`.
+    #
+    #     # Arguments
+    #         inputs: Tensor
+    #         mask: Tensor
+    #     # Returns
+    #         None or a tensor
+    #     """
+    #     # cases need to call the layer.compute_mask when input_mask is None:
+    #     # Masking layer and Embedding layer with mask_zero
+    #     input_shape = K.int_shape(inputs)
+    #     if input_shape[0]:
+    #         # batch size matters, we currently do not handle mask explicitly
+    #         return mask
+    #     inner_mask = mask
+    #     if inner_mask is not None:
+    #         inner_mask_shape = self._get_shape_tuple((-1,), mask, 2)
+    #         inner_mask = K.reshape(inner_mask, inner_mask_shape)
+    #     input_uid = object_list_uid(inputs)
+    #     inner_inputs = self._input_map[input_uid]
+    #     output_mask = self.layer.compute_mask(inner_inputs, inner_mask)
+    #     if output_mask is None:
+    #         if mask is None:
+    #             return None
+    #         # input_mask is not None, and output_mask is None:
+    #         # we should return a not-None mask
+    #         output_mask = mask
+    #         for _ in range(2, len(K.int_shape(mask))):
+    #             output_mask = K.any(output_mask, axis=-1)
+    #     else:
+    #         # output_mask is not None. We need to reshape it
+    #         input_length = input_shape[1]
+    #         if not input_length:
+    #             input_length = K.shape(inputs)[1]
+    #         output_mask_int_shape = K.int_shape(output_mask)
+    #         if output_mask_int_shape is None:
+    #             # if the output_mask does not have a static shape,
+    #             # its shape must be the same as mask's
+    #             if mask is not None:
+    #                 output_mask_int_shape = K.int_shape(mask)
+    #             else:
+    #                 output_mask_int_shape = K.compute_output_shape(input_shape)[:-1]
+    #         output_mask_shape = self._get_shape_tuple(
+    #             (-1, input_length), output_mask, 1, output_mask_int_shape[1:])
+    #         output_mask = K.reshape(output_mask, output_mask_shape)
+    #     return output_mask
 
 
 class Bidirectional(Wrapper):
@@ -276,6 +342,7 @@ class Bidirectional(Wrapper):
         self._trainable = True
         super(Bidirectional, self).__init__(layer, **kwargs)
         self.input_spec = layer.input_spec
+        self._num_constants = None
 
     @property
     def trainable(self):
@@ -314,36 +381,45 @@ class Bidirectional(Wrapper):
             return [output_shape] + state_shape + copy.copy(state_shape)
         return output_shape
 
-    def __call__(self, inputs, initial_state=None, **kwargs):
-        if isinstance(inputs, list):
-            if len(inputs) > 1:
-                initial_state = inputs[1:]
-            inputs = inputs[0]
+    def __call__(self, inputs, initial_state=None, constants=None, **kwargs):
+        inputs, initial_state, constants = recurrent._standardize_args(
+            inputs, initial_state, constants, self._num_constants)
 
-        if initial_state is None:
+        if initial_state is None and constants is None:
             return super(Bidirectional, self).__call__(inputs, **kwargs)
 
-        # Standardize `initial_state` into list
-        if isinstance(initial_state, tuple):
-            initial_state = list(initial_state)
-        elif not isinstance(initial_state, list):
-            initial_state = [initial_state]
+        # Applies the same workaround as in `RNN.__call__`
+        additional_inputs = []
+        additional_specs = []
+        if initial_state is not None:
+            # Check if `initial_state` can be splitted into half
+            num_states = len(initial_state)
+            if num_states % 2 > 0:
+                raise ValueError(
+                    'When passing `initial_state` to a Bidirectional RNN, '
+                    'the state should be a list containing the states of '
+                    'the underlying RNNs. '
+                    'Found: ' + str(initial_state))
 
-        # Check if `initial_state` can be splitted into half
-        num_states = len(initial_state)
-        if num_states % 2 > 0:
-            raise ValueError(
-                'When passing `initial_state` to a Bidirectional RNN, the state '
-                'should be a list containing the states of the underlying RNNs. '
-                'Found: ' + str(initial_state))
+            kwargs['initial_state'] = initial_state
+            additional_inputs += initial_state
+            state_specs = [InputSpec(shape=K.int_shape(state))
+                           for state in initial_state]
+            self.forward_layer.state_spec = state_specs[:num_states // 2]
+            self.backward_layer.state_spec = state_specs[num_states // 2:]
+            additional_specs += state_specs
+        if constants is not None:
+            kwargs['constants'] = constants
+            additional_inputs += constants
+            constants_spec = [InputSpec(shape=K.int_shape(constant))
+                              for constant in constants]
+            self.forward_layer.constants_spec = constants_spec
+            self.backward_layer.constants_spec = constants_spec
+            additional_specs += constants_spec
 
-        # Applies the same workaround as in `RNN.__call__`, without handling constants
-        kwargs['initial_state'] = initial_state
-        additional_inputs = initial_state
-        additional_specs = [InputSpec(shape=K.int_shape(state))
-                            for state in initial_state]
-        self.forward_layer.state_spec = additional_specs[:num_states // 2]
-        self.backward_layer.state_spec = additional_specs[num_states // 2:]
+            self._num_constants = len(constants)
+            self.forward_layer._num_constants = self._num_constants
+            self.backward_layer._num_constants = self._num_constants
 
         is_keras_tensor = K.is_keras_tensor(additional_inputs[0])
         for tensor in additional_inputs:
@@ -368,12 +444,19 @@ class Bidirectional(Wrapper):
         else:
             return super(Bidirectional, self).__call__(inputs, **kwargs)
 
-    def call(self, inputs, training=None, mask=None, initial_state=None):
+    def call(self,
+             inputs,
+             mask=None,
+             training=None,
+             initial_state=None,
+             constants=None):
         kwargs = {}
         if has_arg(self.layer.call, 'training'):
             kwargs['training'] = training
         if has_arg(self.layer.call, 'mask'):
             kwargs['mask'] = mask
+        if has_arg(self.layer.call, 'constants'):
+            kwargs['constants'] = constants
 
         if initial_state is not None and has_arg(self.layer.call, 'initial_state'):
             forward_state = initial_state[:len(initial_state) // 2]
@@ -429,13 +512,24 @@ class Bidirectional(Wrapper):
         self.built = True
 
     def compute_mask(self, inputs, mask):
+        if isinstance(mask, list):
+            mask = mask[0]
         if self.return_sequences:
             if not self.merge_mode:
-                return [mask, mask]
+                output_mask = [mask, mask]
             else:
-                return mask
+                output_mask = mask
         else:
-            return None
+            output_mask = [None, None] if not self.merge_mode else None
+
+        if self.return_state:
+            states = self.forward_layer.states
+            state_mask = [None for _ in states]
+            if isinstance(output_mask, list):
+                return output_mask + state_mask * 2
+            return [output_mask] + state_mask * 2
+
+        return output_mask
 
     @property
     def trainable_weights(self):
@@ -457,11 +551,23 @@ class Bidirectional(Wrapper):
             return self.forward_layer.updates + self.backward_layer.updates
         return []
 
+    def get_updates_for(self, inputs=None):
+        forward_updates = self.forward_layer.get_updates_for(inputs)
+        backward_updates = self.backward_layer.get_updates_for(inputs)
+        return (super(Wrapper, self).get_updates_for(inputs) +
+                forward_updates + backward_updates)
+
     @property
     def losses(self):
         if hasattr(self.forward_layer, 'losses'):
             return self.forward_layer.losses + self.backward_layer.losses
         return []
+
+    def get_losses_for(self, inputs=None):
+        forward_losses = self.forward_layer.get_losses_for(inputs)
+        backward_losses = self.backward_layer.get_losses_for(inputs)
+        return (super(Wrapper, self).get_losses_for(inputs) +
+                forward_losses + backward_losses)
 
     @property
     def constraints(self):
@@ -473,5 +579,18 @@ class Bidirectional(Wrapper):
 
     def get_config(self):
         config = {'merge_mode': self.merge_mode}
+        if self._num_constants is not None:
+            config['num_constants'] = self._num_constants
+
         base_config = super(Bidirectional, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
+    @classmethod
+    def from_config(cls, config, custom_objects=None):
+        from . import deserialize as deserialize_layer
+        rnn_layer = deserialize_layer(config.pop('layer'),
+                                      custom_objects=custom_objects)
+        num_constants = config.pop('num_constants', None)
+        layer = cls(rnn_layer, **config)
+        layer._num_constants = num_constants
+        return layer

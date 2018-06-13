@@ -302,7 +302,7 @@ def validate_file(fpath, file_hash, algorithm='auto', chunk_size=65535):
 class Sequence(object):
     """Base object for fitting to a sequence of data, such as a dataset.
 
-    Every `Sequence` must implements the `__getitem__` and the `__len__` methods.
+    Every `Sequence` must implement the `__getitem__` and the `__len__` methods.
     If you want to modify your dataset between epochs you may implement `on_epoch_end`.
     The method `__getitem__` should return a complete batch.
 
@@ -328,7 +328,7 @@ class Sequence(object):
                 self.batch_size = batch_size
 
             def __len__(self):
-                return np.ceil(len(self.x) / float(self.batch_size))
+                return int(np.ceil(len(self.x) / float(self.batch_size)))
 
             def __getitem__(self, idx):
                 batch_x = self.x[idx * self.batch_size:(idx + 1) * self.batch_size]

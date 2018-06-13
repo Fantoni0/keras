@@ -8,7 +8,7 @@ from .. import backend as K
 from .. import initializers
 from .. import regularizers
 from .. import constraints
-from ..engine import Layer
+from ..engine.base_layer import Layer
 from ..legacy import interfaces
 
 
@@ -93,6 +93,7 @@ class Embedding(Layer):
         self.activity_regularizer = regularizers.get(activity_regularizer)
         self.embeddings_constraint = constraints.get(embeddings_constraint)
         self.mask_zero = mask_zero
+        self.supports_masking = mask_zero
         self.input_length = input_length
 
     def build(self, input_shape):
@@ -108,8 +109,9 @@ class Embedding(Layer):
     def compute_mask(self, inputs, mask=None):
         if not self.mask_zero:
             return None
-        else:
-            return K.cast(K.not_equal(inputs, 0), K.floatx())
+        output_mask = K.not_equal(inputs, 0)
+        K.cast(output_mask, K.floatx())
+        return output_mask
 
     def compute_output_shape(self, input_shape):
         if self.input_length is None:

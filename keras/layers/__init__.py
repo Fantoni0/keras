@@ -1,10 +1,10 @@
 from __future__ import absolute_import
 
 from ..utils.generic_utils import deserialize_keras_object
-from ..engine import Layer
+from ..engine.base_layer import Layer
 from ..engine import Input
 from ..engine import InputLayer
-from ..engine import InputSpec
+from ..engine.base_layer import InputSpec
 from .merge import *
 from .core import *
 from .convolutional import *
@@ -20,8 +20,9 @@ from .advanced_activations import *
 from .wrappers import *
 from .googlenet_custom_layers import *
 from .convolutional_recurrent import *
+from .uncertainty_layers import *
 # TODO: Update attention layers!
-# from .attention import *
+from .attention import *
 from ..legacy.layers import *
 
 

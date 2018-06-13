@@ -13,7 +13,7 @@ from keras.utils import np_utils
 from keras.utils.test_utils import get_test_data, keras_test
 from keras.models import model_from_json, model_from_yaml
 from keras import losses
-from keras.engine.training import _make_batches
+from keras.engine.training_utils import make_batches
 
 input_dim = 16
 num_hidden = 8
@@ -111,7 +111,7 @@ def test_sequential(in_tmpdir):
     def data_generator(x, y, batch_size=50):
         index_array = np.arange(len(x))
         while 1:
-            batches = _make_batches(len(x_test), batch_size)
+            batches = make_batches(len(x_test), batch_size)
             for batch_index, (batch_start, batch_end) in enumerate(batches):
                 batch_ids = index_array[batch_start:batch_end]
                 x_batch = x[batch_ids]
@@ -381,7 +381,6 @@ def test_sequential_update_disabling():
 
     model.compile('sgd', 'mse')
     assert not model.updates
-    assert not model.model.updates
 
     x1 = model.predict(val_a)
     model.train_on_batch(val_a, val_out)
@@ -391,11 +390,35 @@ def test_sequential_update_disabling():
     model.trainable = True
     model.compile('sgd', 'mse')
     assert model.updates
-    assert model.model.updates
 
     model.train_on_batch(val_a, val_out)
     x2 = model.predict(val_a)
     assert np.abs(np.sum(x1 - x2)) > 1e-5
+
+
+@keras_test
+def test_sequential_deferred_build():
+    model = keras.models.Sequential()
+    model.add(keras.layers.Dense(3))
+    model.add(keras.layers.Dense(3))
+    model.compile('sgd', 'mse')
+
+    assert model.built is False
+    assert len(model.layers) == 2
+    assert len(model.weights) == 0
+
+    model.train_on_batch(
+        np.random.random((2, 4)), np.random.random((2, 3)))
+
+    assert model.built is True
+    assert len(model.layers) == 2
+    assert len(model.weights) == 4
+
+    config = model.get_config()
+    new_model = keras.models.Sequential.from_config(config)
+    assert new_model.built is True
+    assert len(new_model.layers) == 2
+    assert len(new_model.weights) == 4
 
 
 if __name__ == '__main__':

@@ -5,7 +5,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from ..engine import Layer, InputSpec
+from ..engine.base_layer import Layer, InputSpec
 from .. import initializers
 from .. import regularizers
 from .. import constraints
@@ -113,6 +113,37 @@ class Scale(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class SqrtScaling(Layer):
+    """Multiplies the input by Sqrt(value).
+
+    # Arguments
+        value: Positive float. Factor of the scaling.
+
+    # Returns
+        Scaled input.
+
+    """
+
+    def __init__(self, value=1., **kwargs):
+        super(SqrtScaling, self).__init__(**kwargs)
+        self.supports_masking = True
+        self.value = value
+
+    def call(self, inputs, mask=None):
+        return inputs * K.sqrt(K.cast(self.value, dtype=K.floatx()))
+
+    def compute_mask(self, inputs, mask=None):
+        return mask
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        config = {"value": self.value}
+        base_config = super(SqrtScaling, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 class BatchNormalization(Layer):
     """Batch normalization layer (Ioffe and Szegedy, 2014).
 
@@ -191,7 +222,6 @@ class BatchNormalization(Layer):
         self.gamma_constraint = constraints.get(gamma_constraint)
 
     def build(self, input_shape):
-
         if self.mode == 1:
             self.input_spec = [InputSpec(shape=input_shape)]
             shape = (input_shape[self.axis],)
@@ -199,8 +229,8 @@ class BatchNormalization(Layer):
             dim = input_shape[self.axis]
             if dim is None:
                 raise ValueError('Axis ' + str(self.axis) + ' of '
-                                                            'input tensor should have a defined dimension '
-                                                            'but the layer received an input with shape ' +
+                                 'input tensor should have a defined dimension '
+                                 'but the layer received an input with shape ' +
                                  str(input_shape) + '.')
             self.input_spec = InputSpec(ndim=len(input_shape),
                                         axes={self.axis: dim})
@@ -269,6 +299,7 @@ class BatchNormalization(Layer):
                         broadcast_moving_variance,
                         broadcast_beta,
                         broadcast_gamma,
+                        axis=self.axis,
                         epsilon=self.epsilon)
                 else:
                     return K.batch_normalization(
@@ -277,6 +308,7 @@ class BatchNormalization(Layer):
                         self.moving_variance,
                         self.beta,
                         self.gamma,
+                        axis=self.axis,
                         epsilon=self.epsilon)
 
             # If the learning phase is *static* and set to inference:
