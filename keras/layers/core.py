@@ -1807,6 +1807,62 @@ class Slice(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class CacheLayer(Layer):
+    """
+    Implements a stateful cache.
+    FIFO police
+
+    # Arguments
+        cache_size: Positive integer, dimensionality of the cache.
+
+    # Input shape
+        2D tensor with shape: `(batch_size, input_dim)`.
+
+    # Output shape
+        2D tensor with shape: `(batch_size, input_dim)`.
+    """
+
+    def __init__(self,
+                 cache_size,
+                 **kwargs):
+        super(CacheLayer, self).__init__(**kwargs)
+        self.size = cache_size
+
+    def build(self, input_shape):
+        assert len(input_shape) == 2
+        input_dim = input_shape[-1]
+        self.cache = K.zeros(shape=(self.size, input_dim))
+        super(CacheLayer, self).build() # Equivalent to self.built = True
+
+    def call(self, input):
+
+        # Compute cosine distance against the cache
+            
+        # Normalize to get probabilities
+
+        # Get weighted sum from the cache
+
+        # Compute output vector
+
+        # Udpate cache
+            # Is the word in the cache?
+                # y - Decay? Or replace?
+                # n -
+                    # Is the cache full?
+                        # y - Replace the oldest
+                        # n - Insert a pelo
+        # Return output
+
+    def compute_mask(self, input_shape, input_mask=None):
+        return input_mask
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        base_config = super(CacheLayer, self).get_config()
+        return dict(list(base_config.items()))
+
 def autocrop(inputs, cropping):
     """Crops the given input arrays.
 

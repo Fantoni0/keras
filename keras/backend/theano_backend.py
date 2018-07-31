@@ -4409,3 +4409,11 @@ def conv_input_length(output_length, filter_size, border_mode, stride):
 
 def as_tensor_variable(x, name=None, ndim=None):
     return T.as_tensor_variable(x, name, ndim)
+
+def cos_distance(a, b, axis=-1):
+    def l2_normalize(x, axis):
+        norm = sqrt(sum(square(x), axis=axis, keepdims=True))
+        return sign(x) * maximum(abs(x), epsilon()) / maximum(norm, epsilon())
+    a_norm = l2_normalize(a, axis=axis)
+    b_norm = l2_normalize(b, axis=axis)
+    return batch_dot(a, b) / (a_norm * b_norm)

@@ -88,7 +88,7 @@ class Embedding(Layer):
 
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.embeddings_initializer = initializers.get(embeddings_initializer)
+        self.embeddings_initializer = initialqwizers.get(embeddings_initializer)
         self.embeddings_regularizer = regularizers.get(embeddings_regularizer)
         self.activity_regularizer = regularizers.get(activity_regularizer)
         self.embeddings_constraint = constraints.get(embeddings_constraint)
