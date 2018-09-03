@@ -11,6 +11,7 @@ from .common import set_floatx
 from .common import cast_to_floatx
 from .common import image_data_format
 from .common import set_image_data_format
+from .common import normalize_data_format
 
 # Set Keras' recursion limit high enough.
 sys.setrecursionlimit(10000)
@@ -76,7 +77,8 @@ if not os.path.exists(_config_path):
 # Set backend based on KERAS_BACKEND flag, if applicable.
 if 'KERAS_BACKEND' in os.environ:
     _backend = os.environ['KERAS_BACKEND']
-    _BACKEND = _backend
+    if _backend:
+        _BACKEND = _backend
 
 # Import backend functions.
 if _BACKEND == 'cntk':

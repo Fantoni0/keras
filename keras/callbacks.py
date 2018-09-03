@@ -477,6 +477,10 @@ class EarlyStopping(Callback):
         baseline: Baseline value for the monitored quantity to reach.
             Training will stop if the model doesn't show improvement
             over the baseline.
+        restore_best_weights: whether to restore model weights from
+            the epoch with the best value of the monitored quantity.
+            If False, the model weights obtained at the last step of
+            training are used.
     """
 
     def __init__(self,
@@ -485,7 +489,8 @@ class EarlyStopping(Callback):
                  patience=0,
                  verbose=0,
                  mode='auto',
-                 baseline=None):
+                 baseline=None,
+                 restore_best_weights=False):
         super(EarlyStopping, self).__init__()
 
         self.monitor = monitor
@@ -495,6 +500,8 @@ class EarlyStopping(Callback):
         self.min_delta = min_delta
         self.wait = 0
         self.stopped_epoch = 0
+        self.restore_best_weights = restore_best_weights
+        self.best_weights = None
 
         if mode not in ['auto', 'min', 'max']:
             warnings.warn('EarlyStopping mode %s is unknown, '
@@ -527,26 +534,38 @@ class EarlyStopping(Callback):
             self.best = np.Inf if self.monitor_op == np.less else -np.Inf
 
     def on_epoch_end(self, epoch, logs=None):
-        current = logs.get(self.monitor)
+        current = self.get_monitor_value(logs)
         if current is None:
-            warnings.warn(
-                'Early stopping conditioned on metric `%s` '
-                'which is not available. Available metrics are: %s' %
-                (self.monitor, ','.join(list(logs.keys()))), RuntimeWarning
-            )
             return
+
         if self.monitor_op(current - self.min_delta, self.best):
             self.best = current
             self.wait = 0
+            if self.restore_best_weights:
+                self.best_weights = self.model.get_weights()
         else:
             self.wait += 1
             if self.wait >= self.patience:
                 self.stopped_epoch = epoch
                 self.model.stop_training = True
+                if self.restore_best_weights:
+                    if self.verbose > 0:
+                        print("Restoring model weights from the end of the best epoch")
+                    self.model.set_weights(self.best_weights)
 
     def on_train_end(self, logs=None):
         if self.stopped_epoch > 0 and self.verbose > 0:
             print('Epoch %05d: early stopping' % (self.stopped_epoch + 1))
+
+    def get_monitor_value(self, logs):
+        monitor_value = logs.get(self.monitor)
+        if monitor_value is None:
+            warnings.warn(
+                'Early stopping conditioned on metric `%s` '
+                'which is not available. Available metrics are: %s' %
+                (self.monitor, ','.join(list(logs.keys()))), RuntimeWarning
+            )
+        return monitor_value
 
 
 class RemoteMonitor(Callback):
@@ -634,8 +653,12 @@ class LearningRateScheduler(Callback):
                              'should be float.')
         K.set_value(self.model.optimizer.lr, lr)
         if self.verbose > 0:
-            print('\nEpoch %05d: LearningRateScheduler reducing learning '
+            print('\nEpoch %05d: LearningRateScheduler setting learning '
                   'rate to %s.' % (epoch + 1, lr))
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        logs['lr'] = K.get_value(self.model.optimizer.lr)
 
 
 class TensorBoard(Callback):
@@ -839,8 +862,8 @@ class TensorBoard(Callback):
                 self.saver = tf.train.Saver(list(embeddings_vars.values()))
             else:
                 embeddings_vars = {layer.name: layer.weights[0]
-                              for layer in self.model.layers
-                              if layer.name in embeddings_layer_names}
+                                   for layer in self.model.layers
+                                   if layer.name in embeddings_layer_names}
                 self.saver = tf.train.Saver(list(embeddings_vars.values()))
 
             embeddings_metadata = {}
@@ -937,19 +960,21 @@ class TensorBoard(Callback):
                                     epoch)
 
                     i += self.batch_size
-        elif self.embeddings_data is None:
+        elif self.embeddings_data is None and self.embeddings_freq != 0:
             if epoch % self.embeddings_freq == 0:
                 self.saver.save(self.sess,
                                 os.path.join(self.log_dir, 'keras_embedding.ckpt'),
                                 epoch)
-
 
         for name, value in logs.items():
             if name in ['batch', 'size']:
                 continue
             summary = tf.Summary()
             summary_value = summary.value.add()
-            summary_value.simple_value = value.item()
+            if isinstance(value, np.ndarray):
+                summary_value.simple_value = value.item()
+            else:
+                summary_value.simple_value = value
             summary_value.tag = name
             self.writer.add_summary(summary, epoch)
         self.writer.flush()

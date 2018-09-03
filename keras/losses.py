@@ -104,11 +104,14 @@ def cosine_proximity(y_true, y_pred):
 
 
 def log_diff(args):
-    """Cross-entropy difference between a GT and a hypothesis
+    """Cross-entropy difference between a GT and a hypothesis.
+
     # Arguments
-         args: y_pred, y_true, h_pred, h_true
+         args: y_pred, y_true, h_pred, h_true.
+
     # Returns
-        cost_difference(categorical_crossentropy(y_true, y_pred) - categorical_crossentropy(h_true, h_pred))
+        cost_difference(categorical_crossentropy(y_true, y_pred) -
+                        categorical_crossentropy(h_true, h_pred)).
     """
     y_true, y_pred, h_true, h_pred = args
     p_y_x = K.mean(K.categorical_crossentropy(y_true, y_pred))
@@ -139,6 +142,17 @@ def deserialize(name, custom_objects=None):
 
 
 def get(identifier):
+    """Get the `identifier` loss function.
+
+    # Arguments
+        identifier: None or str, name of the function.
+
+    # Returns
+        The loss function or None if `identifier` is None.
+
+    # Raises
+        ValueError if unknown identifier.
+    """
     if identifier is None:
         return None
     if isinstance(identifier, six.string_types):

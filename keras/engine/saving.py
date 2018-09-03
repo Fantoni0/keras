@@ -45,7 +45,7 @@ def save_model(model, filepath, overwrite=True, include_optimizer=True):
         model: Keras model instance to be saved.
         filepath: one of the following:
             - string, path where to save the model, or
-            - h5py.File object where to save the model
+            - h5py.File or h5py.Group object where to save the model
         overwrite: Whether we should overwrite any existing
             model at the target location, or instead
             ask the user with a manual prompt.
@@ -79,8 +79,7 @@ def save_model(model, filepath, overwrite=True, include_optimizer=True):
         # if obj is any numpy type
         if type(obj).__module__ == np.__name__:
             if isinstance(obj, np.ndarray):
-                return {'type': type(obj),
-                        'value': obj.tolist()}
+                return obj.tolist()
             else:
                 return obj.item()
 
@@ -96,7 +95,7 @@ def save_model(model, filepath, overwrite=True, include_optimizer=True):
 
     from .. import __version__ as keras_version
 
-    if not isinstance(filepath, h5py.File):
+    if not isinstance(filepath, h5py.Group):
         # If file exists and should not be overwritten.
         if not overwrite and os.path.isfile(filepath):
             proceed = ask_to_proceed_with_overwrite(filepath)
@@ -183,7 +182,7 @@ def save_model(model, filepath, overwrite=True, include_optimizer=True):
                             param_dset[()] = val
                         else:
                             param_dset[:] = val
-        f.flush()
+        f.file.flush()
     finally:
         if opened_new_file:
             f.close()
@@ -195,7 +194,7 @@ def load_model(filepath, custom_objects=None, compile=True):
     # Arguments
         filepath: one of the following:
             - string, path to the saved model, or
-            - h5py.File object from which to load the model
+            - h5py.File or h5py.Group object from which to load the model
         custom_objects: Optional dictionary mapping names
             (strings) to custom classes or functions to be
             considered during deserialization.
@@ -245,7 +244,7 @@ def load_model(filepath, custom_objects=None, compile=True):
             return custom_objects[obj]
         return obj
 
-    opened_new_file = not isinstance(filepath, h5py.File)
+    opened_new_file = not isinstance(filepath, h5py.Group)
     if opened_new_file:
         f = h5py.File(filepath, mode='r')
     else:
@@ -833,7 +832,7 @@ def _need_convert_kernel(original_backend):
     The convolution operation is implemented differently in different backends.
     While TH implements convolution, TF and CNTK implement the correlation operation.
     So the channel axis needs to be flipped when we're loading TF weights onto a TH model,
-    or vice verca. However, there's no conversion required between TF and CNTK.
+    or vice versa. However, there's no conversion required between TF and CNTK.
 
     # Arguments
         original_backend: Keras backend the weights were trained with, as a string.

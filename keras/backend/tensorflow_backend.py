@@ -9,17 +9,19 @@ from tensorflow.python.ops import tensor_array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import functional_ops
 from tensorflow.python.ops import ctc_ops as ctc
-from tensorflow.python.ops import variables as tf_variables
 from tensorflow.python.client import device_lib
 from tensorflow.core.protobuf import config_pb2
 
 from collections import defaultdict
 
 import numpy as np
+from distutils.version import StrictVersion
 import os
 
-from .common import floatx, epsilon
-from .common import image_data_format
+from .common import floatx
+from .common import epsilon
+from .common import normalize_data_format
+from ..utils.generic_utils import transpose_shape
 from ..utils.generic_utils import has_arg
 
 # Legacy functions
@@ -725,10 +727,6 @@ def zeros(shape, dtype=None, name=None):
     if py_all(v.get_shape().as_list()):
         return variable(v, dtype=dtype, name=name)
     return v
-
-
-# Aliases
-zeros_symbolic = zeros
 
 
 def ones(shape, dtype=None, name=None):
@@ -1937,7 +1935,7 @@ def batch_normalization(x, mean, var, beta, gamma, axis=-1, epsilon=1e-3):
     """Applies batch normalization on x given mean, var, beta and gamma.
 
     I.e. returns:
-    `output = (x - mean) / (sqrt(var) + epsilon) * gamma + beta`
+    `output = (x - mean) / sqrt(var + epsilon) * gamma + beta`
 
     # Arguments
         x: Input tensor or variable.
@@ -1954,18 +1952,28 @@ def batch_normalization(x, mean, var, beta, gamma, axis=-1, epsilon=1e-3):
     """
     if ndim(x) == 4:
         # The CPU implementation of FusedBatchNorm only support NHWC
-        if axis == 1:
+        if axis == 1 or axis == -3:
             tf_data_format = 'NCHW'
-        elif axis == 3:
+        elif axis == 3 or axis == -1:
             tf_data_format = 'NHWC'
         else:
             tf_data_format = None
 
         if tf_data_format == 'NHWC' or tf_data_format == 'NCHW' and _has_nchw_support():
+            # The mean / var / beta / gamma may be processed by broadcast
+            # so it may have extra axes with 1, it is not needed and should be removed
+            if ndim(mean) > 1:
+                mean = tf.squeeze(mean)
+            if ndim(var) > 1:
+                var = tf.squeeze(var)
             if beta is None:
                 beta = zeros_like(mean)
+            elif ndim(beta) > 1:
+                beta = tf.squeeze(beta)
             if gamma is None:
                 gamma = ones_like(mean)
+            elif ndim(gamma) > 1:
+                gamma = tf.squeeze(gamma)
             y, _, _ = tf.nn.fused_batch_norm(
                 x,
                 gamma,
@@ -2033,7 +2041,11 @@ def permute_dimensions(x, pattern):
     return tf.transpose(x, perm=pattern)
 
 
-def resize_images(x, height_factor, width_factor, data_format):
+def resize_images(x,
+                  height_factor,
+                  width_factor,
+                  data_format,
+                  interpolation='nearest'):
     """Resizes the images contained in a 4D tensor.
 
     # Arguments
@@ -2041,6 +2053,7 @@ def resize_images(x, height_factor, width_factor, data_format):
         height_factor: Positive integer.
         width_factor: Positive integer.
         data_format: string, `"channels_last"` or `"channels_first"`.
+        interpolation: A string, one of `nearest` or `bilinear`.
 
     # Returns
         A tensor.
@@ -2049,25 +2062,39 @@ def resize_images(x, height_factor, width_factor, data_format):
         ValueError: if `data_format` is neither `"channels_last"` or `"channels_first"`.
     """
     if data_format == 'channels_first':
-        original_shape = int_shape(x)
-        new_shape = tf.shape(x)[2:]
-        new_shape *= tf.constant(np.array([height_factor, width_factor]).astype('int32'))
-        x = permute_dimensions(x, [0, 2, 3, 1])
-        x = tf.image.resize_nearest_neighbor(x, new_shape)
-        x = permute_dimensions(x, [0, 3, 1, 2])
-        x.set_shape((None, None, original_shape[2] * height_factor if original_shape[2] is not None else None,
-                     original_shape[3] * width_factor if original_shape[3] is not None else None))
-        return x
-    elif data_format == 'channels_last':
-        original_shape = int_shape(x)
-        new_shape = tf.shape(x)[1:3]
-        new_shape *= tf.constant(np.array([height_factor, width_factor]).astype('int32'))
-        x = tf.image.resize_nearest_neighbor(x, new_shape)
-        x.set_shape((None, original_shape[1] * height_factor if original_shape[1] is not None else None,
-                     original_shape[2] * width_factor if original_shape[2] is not None else None, None))
-        return x
+        rows, cols = 2, 3
     else:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+        rows, cols = 1, 2
+
+    original_shape = int_shape(x)
+    new_shape = tf.shape(x)[rows:cols + 1]
+    new_shape *= tf.constant(np.array([height_factor, width_factor], dtype='int32'))
+
+    if data_format == 'channels_first':
+        x = permute_dimensions(x, [0, 2, 3, 1])
+    if interpolation == 'nearest':
+        x = tf.image.resize_nearest_neighbor(x, new_shape)
+    elif interpolation == 'bilinear':
+        x = tf.image.resize_bilinear(x, new_shape)
+    else:
+        raise ValueError('interpolation should be one '
+                         'of "nearest" or "bilinear".')
+    if data_format == 'channels_first':
+        x = permute_dimensions(x, [0, 3, 1, 2])
+
+    if original_shape[rows] is None:
+        new_height = None
+    else:
+        new_height = original_shape[rows] * height_factor
+
+    if original_shape[cols] is None:
+        new_width = None
+    else:
+        new_width = original_shape[cols] * width_factor
+
+    output_shape = (None, new_height, new_width, None)
+    x.set_shape(transpose_shape(output_shape, data_format, spatial_axes=(1, 2)))
+    return x
 
 
 def resize_volumes(x, depth_factor, height_factor, width_factor, data_format):
@@ -2387,20 +2414,13 @@ def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
     assert len(padding) == 2
     assert len(padding[0]) == 2
     assert len(padding[1]) == 2
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
-    if data_format == 'channels_first':
-        pattern = [[0, 0],
-                   [0, 0],
-                   list(padding[0]),
-                   list(padding[1])]
-    else:
-        pattern = [[0, 0],
-                   list(padding[0]), list(padding[1]),
-                   [0, 0]]
+    pattern = [[0, 0],
+               list(padding[0]),
+               list(padding[1]),
+               [0, 0]]
+    pattern = transpose_shape(pattern, data_format, spatial_axes=(1, 2))
     return tf.pad(x, pattern)
 
 
@@ -2431,27 +2451,17 @@ def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
     assert len(padding[0]) == 2
     assert len(padding[1]) == 2
     assert len(padding[2]) == 2
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
-    if data_format == 'channels_first':
-        pattern = [
-            [0, 0],
-            [0, 0],
-            [padding[0][0], padding[0][1]],
-            [padding[1][0], padding[1][1]],
-            [padding[2][0], padding[2][1]]
-        ]
-    else:
-        pattern = [
-            [0, 0],
-            [padding[0][0], padding[0][1]],
-            [padding[1][0], padding[1][1]],
-            [padding[2][0], padding[2][1]],
-            [0, 0]
-        ]
+    pattern = [
+        [0, 0],
+        [padding[0][0], padding[0][1]],
+        [padding[1][0], padding[1][1]],
+        [padding[2][0], padding[2][1]],
+        [0, 0]
+    ]
+    pattern = transpose_shape(pattern, data_format, spatial_axes=(1, 2, 3))
+
     return tf.pad(x, pattern)
 
 
@@ -2795,12 +2805,12 @@ class Function(object):
                 # `callable_fn` only supports exact matches.
                 array_vals.append(
                     np.asarray(value,
-                               dtype=tensor.dtype.base_dtype.name))
+                               dtype=tf.as_dtype(tensor.dtype).as_numpy_dtype))
         if self.feed_dict:
             for key in sorted(self.feed_dict.keys()):
                 array_vals.append(
                     np.asarray(self.feed_dict[key],
-                               dtype=key.dtype.base_dtype.name))
+                               dtype=tf.as_dtype(key.dtype).as_numpy_dtype))
 
         # Refresh callable if anything has changed.
         if (self._callable_fn is None or
@@ -2837,22 +2847,22 @@ class Function(object):
         return self._legacy_call(inputs)
         # TODO: Here we must rely on the legacy_call for optimized_cond models. Otherwise, the error
         # "tensorflow.python.framework.errors_impl.InvalidArgumentError: preprocessed_input:0 is both fed and fetched." is raised
-
-        if hasattr(get_session(), '_make_callable_from_options'):
-            if py_any(is_sparse(x) for x in self.inputs):
-                if py_any(is_tensor(x) for x in inputs):
-                    raise ValueError(
-                        'Feeding from symbolic tensors is not '
-                        'supported with sparse inputs.')
-                return self._legacy_call(inputs)
-
-            return self._call(inputs)
-        else:
-            if py_any(is_tensor(x) for x in inputs):
-                raise ValueError(
-                    'In order to feed symbolic tensors to a Keras model '
-                    'in TensorFlow, you need tensorflow 1.8 or higher.')
-            return self._legacy_call(inputs)
+        #
+        # if hasattr(get_session(), '_make_callable_from_options'):
+        #     if py_any(is_sparse(x) for x in self.inputs):
+        #         if py_any(is_tensor(x) for x in inputs):
+        #             raise ValueError(
+        #                 'Feeding from symbolic tensors is not '
+        #                 'supported with sparse inputs.')
+        #         return self._legacy_call(inputs)
+        #
+        #     return self._call(inputs)
+        # else:
+        #     if py_any(is_tensor(x) for x in inputs):
+        #         raise ValueError(
+        #             'In order to feed symbolic tensors to a Keras model '
+        #             'in TensorFlow, you need tensorflow 1.8 or higher.')
+        #     return self._legacy_call(inputs)
 
 
 def function(inputs, outputs, updates=None, **kwargs):
@@ -2924,7 +2934,7 @@ def rnn(step_function, inputs, initial_states,
                 states: List of tensors.
             Returns:
                 outputs: Tensor with shape (samples, ...) (no time dimension),
-                new_states: Tist of tensors, same length and shapes
+                new_states: List of tensors, same length and shapes
                     as 'states'.
         inputs: Tensor of temporal data of shape (samples, time, ...)
             (at least 3D).
@@ -3151,7 +3161,10 @@ def rnn(step_function, inputs, initial_states,
                     tiled_mask_t = tf.tile(mask_t,
                                            tf.stack([1, tf.shape(output)[1]]))
                     output = tf.where(tiled_mask_t, output, states[0])
-                    new_states = [tf.where(tiled_mask_t, new_states[i], states[i]) for i in range(len(states))]
+                    new_states = [
+                        tf.where(tf.tile(mask_t, tf.stack([1, tf.shape(new_states[i])[1]])),
+                                 new_states[i], states[i]) for i in range(len(states))
+                    ]
                     output_ta_t = output_ta_t.write(time, output)
                     return (time + 1, output_ta_t) + tuple(new_states)
         else:
@@ -3193,18 +3206,18 @@ def rnn(step_function, inputs, initial_states,
             non_extra_states = [final_outputs[i + 3] for i in range(len(final_outputs[3:]))
                                 if i not in pos_extra_outputs_states]
             states = non_extra_states + final_outputs[2]
-        else:
-            new_states = final_outputs[2:]
-        if pos_extra_outputs_states is not None:
             new_states = []
             for i_s, state in enumerate(states):
                 if i_s in pos_extra_outputs_states:  # This +1 accounts for the last_output
                     new_states.append(state.stack())
                 else:
                     new_states.append(state)
+        else:
+            new_states = final_outputs[2:]
 
         outputs = output_ta.stack()
         last_output = output_ta.read(last_time - 1)
+
     axes = [1, 0] + list(range(2, len(outputs.get_shape())))
     outputs = tf.transpose(outputs, axes)
     last_output._uses_learning_phase = uses_learning_phase
@@ -3389,11 +3402,7 @@ def softmax(x, axis=-1):
     # Returns
         A tensor.
     """
-    try:
-        t = tf.nn.softmax(x, axis=axis)
-    except:  # tensorflow retrocompatibility
-        t = tf.nn.softmax(x)
-    return t
+    return tf.nn.softmax(x, axis=axis)
 
 
 def softmax_3d(x):
@@ -3713,7 +3722,9 @@ def _preprocess_conv1d_input(x, data_format):
     # Returns
         A tensor.
     """
-    if dtype(x) == 'float64':
+    # tensorflow doesn't support float64 for conv layer before 1.8.0
+    if (dtype(x) == 'float64' and
+            StrictVersion(tf.__version__.split('-')[0]) < StrictVersion('1.8.0')):
         x = tf.cast(x, 'float32')
     tf_data_format = 'NWC'  # to pass TF Conv2dNative operations
     if data_format == 'channels_first':
@@ -3734,7 +3745,9 @@ def _preprocess_conv2d_input(x, data_format):
     # Returns
         A tensor.
     """
-    if dtype(x) == 'float64':
+    # tensorflow doesn't support float64 for conv layer before 1.8.0
+    if (dtype(x) == 'float64' and
+            StrictVersion(tf.__version__.split('-')[0]) < StrictVersion('1.8.0')):
         x = tf.cast(x, 'float32')
     tf_data_format = 'NHWC'
     if data_format == 'channels_first':
@@ -3755,7 +3768,9 @@ def _preprocess_conv3d_input(x, data_format):
     # Returns
         A tensor.
     """
-    if dtype(x) == 'float64':
+    # tensorflow doesn't support float64 for conv layer before 1.8.0
+    if (dtype(x) == 'float64' and
+            StrictVersion(tf.__version__.split('-')[0]) < StrictVersion('1.8.0')):
         x = tf.cast(x, 'float32')
     tf_data_format = 'NDHWC'
     if data_format == 'channels_first':
@@ -3806,10 +3821,7 @@ def conv1d(x, kernel, strides=1, padding='valid',
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     kernel_shape = kernel.get_shape().as_list()
     if padding == 'causal':
@@ -3857,10 +3869,7 @@ def conv2d(x, kernel, strides=(1, 1), padding='valid',
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     x, tf_data_format = _preprocess_conv2d_input(x, data_format)
 
@@ -3899,10 +3908,7 @@ def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
     if isinstance(output_shape, (tuple, list)):
         output_shape = tf.stack(output_shape)
 
@@ -3951,10 +3957,7 @@ def separable_conv1d(x, depthwise_kernel, pointwise_kernel, strides=1,
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
     if isinstance(strides, int):
         strides = (strides,)
     if isinstance(dilation_rate, int):
@@ -4012,10 +4015,7 @@ def separable_conv2d(x, depthwise_kernel, pointwise_kernel, strides=(1, 1),
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     x, tf_data_format = _preprocess_conv2d_input(x, data_format)
     padding = _preprocess_padding(padding)
@@ -4054,10 +4054,7 @@ def depthwise_conv2d(x, depthwise_kernel, strides=(1, 1), padding='valid',
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     x, tf_data_format = _preprocess_conv2d_input(x, data_format)
     padding = _preprocess_padding(padding)
@@ -4097,10 +4094,7 @@ def conv3d(x, kernel, strides=(1, 1, 1), padding='valid',
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     x, tf_data_format = _preprocess_conv3d_input(x, data_format)
     padding = _preprocess_padding(padding)
@@ -4137,10 +4131,7 @@ def conv3d_transpose(x, kernel, output_shape, strides=(1, 1, 1),
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
     if isinstance(output_shape, (tuple, list)):
         output_shape = tf.stack(output_shape)
 
@@ -4190,10 +4181,7 @@ def pool2d(x, pool_size, strides=(1, 1),
         ValueError: if `data_format` is neither `"channels_last"` or `"channels_first"`.
         ValueError: if `pool_mode` is neither `"max"` or `"avg"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     x, tf_data_format = _preprocess_conv2d_input(x, data_format)
     padding = _preprocess_padding(padding)
@@ -4239,10 +4227,7 @@ def pool3d(x, pool_size, strides=(1, 1, 1), padding='valid',
         ValueError: if `data_format` is neither `"channels_last"` or `"channels_first"`.
         ValueError: if `pool_mode` is neither `"max"` or `"avg"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     x, tf_data_format = _preprocess_conv3d_input(x, data_format)
     padding = _preprocess_padding(padding)
@@ -4287,25 +4272,18 @@ def bias_add(x, bias, data_format=None):
                        the bias should be either a vector or
                        a tensor with ndim(x) - 1 dimension
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
     bias_shape = int_shape(bias)
     if len(bias_shape) != 1 and len(bias_shape) != ndim(x) - 1:
         raise ValueError('Unexpected bias dimensions %d, expect to be 1 or %d dimensions'
                          % (len(bias_shape), ndim(x)))
     if ndim(x) == 5:
-        if data_format == 'channels_first':
-            if len(bias_shape) == 1:
-                x += reshape(bias, (1, bias_shape[0], 1, 1, 1))
-            else:
-                x += reshape(bias, (1, bias_shape[3]) + bias_shape[:3])
-        elif data_format == 'channels_last':
-            if len(bias_shape) == 1:
-                x += reshape(bias, (1, 1, 1, bias_shape[0]))
-            else:
-                x += reshape(bias, (1,) + bias_shape)
+        if len(bias_shape) == 1:
+            new_shape = (1, 1, 1, 1, bias_shape[0])
+        else:
+            new_shape = (1,) + bias_shape
+        new_shape = transpose_shape(new_shape, data_format, spatial_axes=(1, 2, 3))
+        x += reshape(bias, new_shape)
     elif ndim(x) == 4:
         if data_format == 'channels_first':
             if len(bias_shape) == 1:
@@ -4323,16 +4301,12 @@ def bias_add(x, bias, data_format=None):
             else:
                 x += reshape(bias, (1,) + bias_shape)
     elif ndim(x) == 3:
-        if data_format == 'channels_first':
-            if len(bias_shape) == 1:
-                x += reshape(bias, (1, bias_shape[0], 1))
-            else:
-                x += reshape(bias, (1, bias_shape[1], bias_shape[0]))
-        elif data_format == 'channels_last':
-            if len(bias_shape) == 1:
-                x += reshape(bias, (1, 1, bias_shape[0]))
-            else:
-                x += reshape(bias, (1, ) + bias_shape)
+        if len(bias_shape) == 1:
+            new_shape = (1, 1, bias_shape[0])
+        else:
+            new_shape = (1,) + bias_shape
+        new_shape = transpose_shape(new_shape, data_format, spatial_axes=(1,))
+        x += reshape(bias, new_shape)
     else:
         x = tf.nn.bias_add(x, bias)
     return x
@@ -4682,10 +4656,7 @@ def local_conv1d(inputs, kernel, kernel_size, strides, data_format=None):
         ValueError: If `data_format` is neither
             `"channels_last"` nor `"channels_first"`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     stride = strides[0]
     kernel_shape = int_shape(kernel)
@@ -4734,10 +4705,7 @@ def local_conv2d(inputs, kernel, kernel_size, strides, output_shape, data_format
         ValueError: if `data_format` is neither
                     `channels_last` or `channels_first`.
     """
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format: ' + str(data_format))
+    data_format = normalize_data_format(data_format)
 
     stride_row, stride_col = strides
     output_row, output_col = output_shape
