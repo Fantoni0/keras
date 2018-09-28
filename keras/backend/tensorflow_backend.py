@@ -4763,3 +4763,51 @@ def conv_input_length(output_length, filter_size, padding, stride):
     elif padding == 'full':
         pad = filter_size - 1
     return (output_length - 1) * stride - 2 * pad + filter_size + add_extra
+
+def cos_similarity(a, b, axis=-1):
+    """Computes the cosine similarity bewtween two input tensor along the specified axis
+
+    # Arguments
+        a: Input tensor
+        b: Second input tensor
+        axis: Axis along which to perform the operation.
+    # Returns
+        Vector or Matrix containing the result in the specified axis
+    """
+    def l2_normalize(x, axis):
+        return tf.nn.l2_normalize(x, dim=axis)
+    a_norm = l2_normalize(a, axis=axis)
+    b_norm = l2_normalize(b, axis=axis)
+    return tf.matmul(a_norm, tf.transpose(b_norm, perm=[1, 0]))
+
+def nonzero(x):
+    """Returns the indexes of the nonzero elements of a tensor
+
+    # Arguments
+        x: Input tensor
+    # Returns
+        Tuple of vectors or matrix containing the indexes
+    """
+
+    return tf.where(tf.not_equal(x, 0))
+
+def top_k(x, k):
+    """ Get the k greater elements
+    # Arguments
+        x: Input tensor
+        k: Number of elements to retrieve
+    # Returns
+        Tuple of containing the top k elements in the tensor and their indexes
+    """
+    out = tf.nn.top_k(x, k)
+    return (out.values, out.indices)
+
+def unique(x):
+    """ Returns an array with no duplicates, just unique elemnts
+
+    # Arguments
+        x: Input tensor
+    # Returns
+        Array with unique elements
+    """
+    return tf.unique(x).values

@@ -1016,6 +1016,7 @@ class Dense(Layer):
             output = K.bias_add(output, self.bias, data_format='channels_last')
         if self.activation is not None:
             output = self.activation(output)
+
         return output
 
     def compute_output_shape(self, input_shape):
@@ -1137,7 +1138,8 @@ class MaskedMean(Layer):
         super(MaskedMean, self).__init__(**kwargs)
 
     def call(self, inputs, mask=None):
-        return K.mean(K.cast(mask[:, :, None], K.dtype(inputs)) * inputs, axis=1)
+        output = K.mean(K.cast(mask[:, :, None], K.dtype(inputs)) * inputs, axis=1)
+        return output
 
     def compute_mask(self, input_shape, input_mask=None):
         return None
@@ -1796,62 +1798,6 @@ class Slice(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class CacheLayer(Layer):
-    """
-    Implements a stateful cache.
-    FIFO police
-
-    # Arguments
-        cache_size: Positive integer, dimensionality of the cache.
-
-    # Input shape
-        2D tensor with shape: `(batch_size, input_dim)`.
-
-    # Output shape
-        2D tensor with shape: `(batch_size, input_dim)`.
-    """
-
-    def __init__(self,
-                 cache_size,
-                 **kwargs):
-        super(CacheLayer, self).__init__(**kwargs)
-        self.size = cache_size
-
-    def build(self, input_shape):
-        assert len(input_shape) == 2
-        input_dim = input_shape[-1]
-        self.cache = K.zeros(shape=(self.size, input_dim))
-        super(CacheLayer, self).build() # Equivalent to self.built = True
-
-    def call(self, input):
-
-        # Compute cosine distance against the cache
-            
-        # Normalize to get probabilities
-
-        # Get weighted sum from the cache
-
-        # Compute output vector
-
-        # Udpate cache
-            # Is the word in the cache?
-                # y - Decay? Or replace?
-                # n -
-                    # Is the cache full?
-                        # y - Replace the oldest
-                        # n - Insert a pelo
-        # Return output
-
-    def compute_mask(self, input_shape, input_mask=None):
-        return input_mask
-
-    def compute_output_shape(self, input_shape):
-        return input_shape
-
-    def get_config(self):
-        base_config = super(CacheLayer, self).get_config()
-        return dict(list(base_config.items()))
-
 def autocrop(inputs, cropping):
     """Crops the given input arrays.
 
@@ -1949,6 +1895,358 @@ def autocrop(inputs, cropping):
 
         return [input[slices] for input, slices in
                 zip(inputs, slices_by_input)]
+
+# class CachelayerSentence(Layer):
+#     """
+#         Implements a stateful cache.
+#         FIFO police
+#
+#         # Arguments
+#             cache_size: Positive integer, dimensionality of the cache.
+#
+#         # Input shape
+#             3D tensor with shape: `(batch_size, timesteps, input_dim)`.
+#
+#         # Output shape
+#             3D tensor with shape: `(batch_size, timesteps, input_dim)`.
+#         """
+#
+#     def __init__(self,
+#                  cache_size,
+#                  **kwargs):
+#         super(CachelayerSentence, self).__init__(**kwargs)
+#         self.size = cache_size
+#
+#     def build(self, input_shape):
+#         assert len(input_shape) == 2
+#         input_dim = input_shape[0][-1]
+#         self.cache = K.zeros(shape=(self.size, input_dim))  # Create internal tensor to act like cache
+#         self.time = K.ones(shape=(self.size,))  # Create tensor to date the updates
+#         self.words = K.zeros(shape=(self.size,))  # Create tensor to know the associated word (by index)
+#         self.elements = 0
+#         # super(CacheLayer, self).build()  # Equivalent to self.built = True
+#         self.built = True
+#
+#     def call(self, inputs, mask=None):
+#
+#         value = inputs[0]  # Batch x Timesteps x Embedding
+#         word = inputs[1]  # Batch x Timesteps x 1
+#
+#         # Compute the new representation of the sentences by summing its words representation
+#         in_sentences = K.sum(value, axis=1) # B x Embedding
+#
+#         # Compute cosine distance against the cache
+#         # cache  C x E matrix
+#         cos_distance = K.cos_distance(in_sentences, K.transpose(self.cache), axis=1)  # B x C
+#
+#         # Normalize to get probabilities
+#         probs = K.softmax(cos_distance, axis=1)  # B x C
+#
+#         # Get weighted sum from the cache.
+#         sum_cache = K.dot(probs, self.cache)  # B x E
+#
+#         # Compute output vector
+#         # TODO: Add gate to regulate information
+#         out = in_sentences + sum_cache
+#
+#         # Udpate cache
+#         max_contributors = K.argmax(probs, axis=1)  # Get the sentences that helped the most to each sentence
+#         self.time = K.set_subtensor(self.time[max_contributors], 0)  # Set time to 0 since they are updated
+#
+#
+#         in_cache = K.equal(self.words[None, None, :], word)  # Is the word in the cache? # B x T x C
+#         eq_timesteps = K.any(in_cache, axis=2)  # B x T
+#         eq_cache = K.any(K.any(in_cache, axis=0), axis=0)  # C x 1
+#         free_space = self.size - self.elements
+#
+#         if K.any(eq_cache):  # At least one word is already in cache
+#
+#             # 1 - Update items that were already in the cache
+#             # Get the indices of the cache hits
+#             idx_value = K.nonzero(eq_timesteps)  # 2 x Hits in the cache
+#             # Get which rows of the cache should be updated
+#             idx_cache = K.equal(word[idx_value], self.words).nonzero()[1]
+#             # Update cache and time
+#             self.cache = K.set_subtensor(self.cache[idx_cache],
+#                                          value[idx_value])  # Update Cache. TODO: Add Gate or Decay
+#             self.time = K.set_subtensor(self.time[idx_cache], 0)  # Set time to 0 since they are updated
+#
+#             # < -- One tab less I think ! Outside the If
+#             # 2 - Get oldest
+#             n_candidates = K.sum(
+#                 K.all(K.equal(K.equal(word, self.words), 0), axis=2))  # Number candidates to enter the cache
+#             idx_misses = K.nonzero(K.all(K.equal(K.equal(word, self.words), 0), axis=2))
+#
+#             if self.elements == self.size:  # Cache is full
+#                 # Maximum number of replacements
+#                 max_inserts = self.size - K.sum(eq_cache)
+#
+#                 # Number of misses
+#                 n_misses = K.sum(K.concatenate(word, axis=0))
+#
+#                 # Get the free_space oldest entries and replace them with the new ones
+#                 old_words, old_idx = K.top_k(self.time, max_inserts)
+#
+#                 # Compute the maximum new updates (unique no repetitions)
+#
+#                 # Replace old entries
+#                 self.cache = K.set_subtensor(self.cache[old_idx],
+#                                              value[])  # Update Cache. TODO: Add Gate or Decay
+#                 self.time = K.set_subtensor(self.time[old_idx], 0)  # Set time to 0 since they are updated
+#
+#             elif n_candidates <= free_space:  # Cache can allocate all the new candidates
+#             # Same as before?
+#
+#             # Update number of elements
+#
+#             else:  # Some candidates will be discarded
+#         # Get oldest elements in the chache
+#
+#         # Get the maximun possible new candidates (avoid repetitions of words) and update cache
+#
+#         else:  # Not a single word in the cache. First call or improbable case
+#             # Avoid duplicates!!!!!!
+#             self.cache = K.set_subtensor(self.cache[0:free_space], K.concatenate(value, axis=0)[:free_space])
+#             self.time = K.set_subtensor(self.time[:], 0)  # Set time to 0 since they are updated
+#
+#
+#         # Return output
+#         return out
+#
+#     def compute_mask(self, input_shape, input_mask=None):
+#         return input_mask
+#
+#     def compute_output_shape(self, input_shape):
+#         return input_shape
+#
+#     def get_config(self):
+#         base_config = super(CacheLayerSentence, self).get_config()
+#         return dict(list(base_config.items()))
+
+
+class CacheLayer(Layer):
+    """
+    Implements a stateful cache.
+    FIFO police
+
+    # Arguments
+        cache_size: Positive integer, dimensionality of the cache.
+
+    # Input shape
+        3D tensor with shape: `(batch_size, timesteps, input_dim)`.
+
+    # Output shape
+        3D tensor with shape: `(batch_size, timesteps, input_dim)`.
+    """
+
+    def __init__(self,
+                 cache_size,
+                 max_idx,
+                 **kwargs):
+        self.size = cache_size
+        self.max_idx_words = max_idx
+        super(CacheLayer, self).__init__(**kwargs)
+
+
+    def build(self, input_shape):
+        assert len(input_shape) == 2
+        self.input_dim = input_shape[0][-1]
+        self.cache = K.variable(np.zeros(shape=(self.size, self.input_dim)))  # Create internal tensor to act like cache
+        self.time = K.ones(shape=(self.size,))  # Create tensor to date the updates
+        self.words = K.variable(K.ones(shape=(self.size,), dtype='int64') * -1, dtype='int64')  # Create tensor to know the associated word (by index)
+        self.tmp_tensor = K.zeros(shape=(self.max_idx_words, self.input_dim))
+        self.elements = 0
+        self.built = True
+
+    def call(self, inputs, mask=None):
+        updates = []  # Keras bullshit to propagate updates
+        self.stateful = True  # Updates will be carried out in training and test
+
+        value = inputs[0]   # Batch x Timesteps x Embedding
+        word = inputs[1]    # Batch x Timesteps
+        word = K.expand_dims(word, axis=-1)  # Batch x Timesteps x 1
+
+        # word = K.printing(word, 'word= ')
+        # word *= 1
+        #
+        # value = K.printing(value, 'value= ')
+        # value *= 1.
+
+        # print_cache = K.printing(self.cache, "CACHE_START")
+        # print_cache *= 1.
+
+        # Compute cosine
+        #  distance against the cache
+        # cache  C x E matrix
+        cos_distance = K.cos_similarity(value, K.transpose(self.cache), axes=[2, 0])  # cos_distance B x T x C
+        # cos_distance = K.printing(cos_distance, "COSINE DISTANCE CALL= ")
+        # cos_distance *= 1.0
+
+        # Normalize to get probabilities
+        probs = K.softmax_3d(cos_distance)  # B x T x C
+
+        # Get weighted sum from the cache.
+        #batch_cache = K.expand_dims(self.cache, axis=0)  # 1 x C x E
+        # probs = K.printing(probs, "PROBABILITIES= ")
+        # probs *= 1.
+        multi = K.dot(probs, self.cache)  # B x T x E
+        # multi = K.printing(multi, "MULTI = ")
+        # multi *= 1.
+
+        # Udpate cache
+        in_cache = K.equal(self.words[None, None, :], word, name="FIRST_EQUAL= ")  # Is the word in the cache? # B x T x C
+        # in_cache = K.printing(in_cache, "IN_CACHE= ")
+        # in_cache *= 1
+
+        eq_timesteps = K.any(in_cache, axis=2)  # B x T
+        eq_cache = K.any(K.any(in_cache, axis=0), axis=0)  # C x 1
+
+        # eq_cache = K.printing(eq_cache, "EQ_CACHE= ")
+        # eq_cache *= 1
+        #
+        # eq_timesteps = K.printing(eq_timesteps, "EQ_TIMESTEPS= ")
+        # eq_timesteps *= 1
+
+        #if K.eval(K.sum(eq_cache)) > 0:  # At least one word is already in cache
+        # 1 - Update items that were already in the cache
+        # Get the indices of the cache hits
+        idx_value = K.nonzero(eq_timesteps)  # 2 x Hits in the cache
+
+
+        # Get which rows of the cache should be updated
+        idx_cache = K.equal(word[idx_value], self.words).nonzero()[1]
+
+        idx_cache = K.printing(idx_cache, "IDX_CACHE_DENTRO_DEL_IF= ")
+        idx_cache *= 1
+        # self.cache = K.printing(self.cache, "CACHE_IF")
+        # self.cache *= 1.
+
+        # Update cache and time
+        upd_cache = K.set_subtensor(self.cache[idx_cache],
+                                     value[idx_value])  # Update Cache. TODO: Add Gate or Decay
+        upd_time = K.set_subtensor(self.time[idx_cache], 0)  # Set time to 0 since they are updated
+
+        updates.append((self.cache, upd_cache))
+        updates.append((self.time, upd_time))
+
+        # self.cache = K.printing(self.cache, "CACHE_IF_2")
+        # self.cache *= 1.
+
+        # 2 - Get oldest entries and replace them with new candidates
+        # Get idx of the misses and its number
+        idx_misses = K.nonzero(K.equal(eq_timesteps, 0))
+        # idx_misses = K.printing(idx_misses[1], "IDX_MISSES[0]= ")
+        # idx_misses *= 1
+        # idx_misses = idx_misses[0]
+        #idx_misses = idx_misses_0
+        # n_misses = K.int_shape(idx_misses[0])  # Number of misses
+
+        # Create temporal tensor to contain new candidates
+
+        idx_tmp_tensor = K.reshape(word[idx_misses], (-1,))
+        # idx_tmp_tensor = K.printing(idx_tmp_tensor, "IDX_TMP_TENSOR= ")
+        # idx_tmp_tensor *= 1
+
+        value_misses = value[idx_misses]
+        # value_misses = K.printing(value_misses , "VALUE_MISSES= ")
+        # value_misses *= 1.
+
+        self.tmp_tensor = K.set_subtensor(self.tmp_tensor[idx_tmp_tensor],  # K.reshape(word[idx_misses], (n_misses,))
+                        value_misses)
+        # self.tmp_tensor = K.printing(self.tmp_tensor, "TMP_TENSOR_AFTER_SET_SUBTENSOR= ")
+        # self.tmp_tensor *= 1.
+
+        idx_nonzero = K.nonzero(K.sum(K.abs(self.tmp_tensor), axis=1))[0]
+        # idx_nonzero = K.printing(idx_nonzero, "IDX_NONZERO= ")
+        # idx_nonzero *= 1
+
+        nonzero_elements = self.tmp_tensor[idx_nonzero]
+        unique_candidates = K.shape(idx_nonzero)[0]
+
+        # Maximum number of replacements. Maximum number of new inserts in this batch
+        max_inserts = self.size - K.sum(eq_cache)
+        # max_inserts = K.printing(max_inserts, "MAX_INSERTS= ")
+        # max_inserts *= 1
+
+        # unique_candidates = K.printing(unique_candidates, "unique_candidates= ")
+        # unique_candidates *= 1
+
+
+        # real_inserts = K.min([max_inserts, unique_candidates])
+        real_inserts = K.switch(K.greater_equal(max_inserts, unique_candidates),
+                                unique_candidates,
+                                max_inserts)#[0]
+
+        # real_inserts = K.printing(real_inserts, "REAL_INSERTS= ")
+        # real_inserts *= 1
+
+        # Get the min(max_inserts, unique_candidates) oldest entries and replace them with the new ones
+        old_words, old_idx = K.top_k(self.time, real_inserts)
+        #
+        # old_idx = K.printing(old_idx, "OLD_IDX = ")
+        # old_idx *= 1
+
+        new_cache = K.ifelse2(K.not_equal(real_inserts, 0), nonzero_elements[:real_inserts], self.cache[old_idx])
+        new_time = K.switch(K.not_equal(real_inserts, 0), np.zeros(shape=(1)), self.time[old_idx])
+        new_words = K.ifelse2(K.not_equal(real_inserts, 0), idx_nonzero[:real_inserts], self.words[old_idx])
+
+        # new_words = K.printing(self.words[old_idx], "NEW_WORDS= ")
+        # new_words *= 1
+        # Replace old entries
+        # old_cache = self.cache[old_idx]
+        # old_cache = K.printing(old_cache, "OLD_CACHE= ")
+        # old_cache *= 1
+        #
+        # nzero = nonzero_elements[:real_inserts]
+        # nzero = K.printing(nzero, "NONZERO_CACHE= ")
+        # nzero *= 1.
+        #upd_cache = K.zeros_like(self.cache)
+        # nonzero_elements[:real_inserts]
+        upd_cache = K.set_subtensor(self.cache[old_idx], new_cache) # Update Cache. TODO: Add Gate or Decay
+        upd_time = K.set_subtensor(self.time[old_idx], new_time)  # Set time to 0 since they are updated
+        upd_words = K.set_subtensor(self.words[old_idx], new_words)  # idx_nonzero[:real_inserts]
+
+        # Add updates
+        updates.append((self.cache, upd_cache))
+        updates.append((self.time, upd_time))
+        updates.append((self.words, upd_words))
+
+        # Update number of elements in the cache
+        self.elements += real_inserts
+
+        # Set tmp_tensor to zeros again
+        self.tmp_tensor = K.zeros_like(self.tmp_tensor) # Try removing this line
+
+        # self.cache = K.printing(self.cache, "END_CACHE_END")
+        # self.cache *= 1.
+        #
+        # self.time = K.printing(self.time, "END_TIME_END= ")
+        # self.time *= 1
+        #
+        # self.words = K.printing(self.words, "END_WORDS_END")
+        # self.words *= 1
+
+        # Compute output vector
+        # TODO: Add gate to regulate information
+        out = value + multi
+        out = K.printing(out, "OUT_BEFORE_AAAA= ")
+        out *= 1.
+        # Call updates to take effect each time we receive an input
+        self.add_update(updates, inputs)
+
+
+        # Return output
+        return out #+ self.cache[0] * 0. + (self.time[0] * 0.) #+ K.abs(self.words[0]) * 0.  # Why? To introduce the tensors in the graph
+
+    def compute_mask(self, input_shape, input_mask=None):
+        return input_mask
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0]
+
+    def get_config(self):
+        base_config = super(CacheLayer, self).get_config()
+        return dict(list(base_config.items()))
 
 
 def autocrop_array_shapes(input_shapes, cropping):

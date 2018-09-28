@@ -6,12 +6,14 @@ from .. import backend
 from .. import layers
 from .. import models
 from .. import utils
+from .. import engine
 
 import keras_applications
 
 if not hasattr(keras_applications, 'get_submodules_from_kwargs'):
     keras_applications.set_keras_submodules(
         backend=backend,
+        engine=engine,
         layers=layers,
         models=models,
         utils=utils)

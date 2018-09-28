@@ -88,7 +88,7 @@ class Embedding(Layer):
 
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.embeddings_initializer = initialqwizers.get(embeddings_initializer)
+        self.embeddings_initializer = initializers.get(embeddings_initializer)
         self.embeddings_regularizer = regularizers.get(embeddings_regularizer)
         self.activity_regularizer = regularizers.get(activity_regularizer)
         self.embeddings_constraint = constraints.get(embeddings_constraint)
@@ -137,8 +137,8 @@ class Embedding(Layer):
     def call(self, inputs):
         if K.dtype(inputs) != 'int32':
             inputs = K.cast(inputs, 'int32')
-        out = K.gather(self.embeddings, inputs)
-        return out
+        output = K.gather(self.embeddings, inputs)
+        return output
 
     def get_config(self):
         config = {'input_dim': self.input_dim,

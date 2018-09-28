@@ -1485,7 +1485,7 @@ def clip(x, min_value, max_value):
     return T.clip(x, min_value, max_value)
 
 
-def equal(x, y):
+def equal(x, y, name=''):
     """Element-wise equality between two tensors.
 
     # Arguments
@@ -2521,6 +2521,8 @@ class Function(object):
         self.name = name
 
     def __call__(self, inputs):
+        # print("SELF.NAME= ", self.name)
+        # print(inputs)
         assert isinstance(inputs, (list, tuple))
         return self.function(*inputs)
 
@@ -2782,6 +2784,8 @@ def switch(condition, then_expression, else_expression):
             condition = expand_dims(condition)
     return T.switch(condition, then_expression, else_expression)
 
+def ifelse2(condition, then_expression, else_expression):
+    return ifelse(condition, then_expression, else_expression)
 
 def in_train_phase(x, alt, training=None):
     """Selects `x` in train phase, and `alt` otherwise.
@@ -4494,10 +4498,51 @@ def conv_input_length(output_length, filter_size, border_mode, stride):
 def as_tensor_variable(x, name=None, ndim=None):
     return T.as_tensor_variable(x, name, ndim)
 
-def cos_distance(a, b, axis=-1):
-    def l2_normalize(x, axis):
-        norm = sqrt(sum(square(x), axis=axis, keepdims=True))
-        return sign(x) * maximum(abs(x), epsilon()) / maximum(norm, epsilon())
-    a_norm = l2_normalize(a, axis=axis)
-    b_norm = l2_normalize(b, axis=axis)
-    return batch_dot(a, b) / (a_norm * b_norm)
+def cos_similarity(a, b, axes=[-1, -1]):
+    """ Computes the cosine similarity bewtween two input tensor along the specified axis
+
+    # Arguments
+        a: Input tensor
+        b: Second input tensor
+        axis: Axis along which to perform the operation.
+    # Returns
+        Vector or Matrix containing the result in the specified axis
+    """
+    a_norm = l2_normalize(a, axis=axes[0])
+    b_norm = l2_normalize(b, axis=axes[1])
+
+    # a_norm = printing(a_norm, "A_NORM= ")
+    # a_norm *= 1.
+    # b_norm = printing(b_norm, "B_NORM= ")
+    # b_norm *= 1.
+    return dot(a_norm, b_norm)
+
+def nonzero(x):
+    """ Returns the indexes of the nonzero elements of a tensor
+
+    # Arguments
+        x: Input tensor
+    # Returns
+        Tuple of vectors or matrix containing the indexes
+    """
+    return x.nonzero()
+
+def top_k(x, k):
+    """ Get the k greater elements
+    # Arguments
+        x: Input tensor
+        k: Number of elements to retrieve
+    # Returns
+        Tuple of containing the top k elements in the tensor and their indexes
+    """
+    return (T.sort(x)[-k:], T.argsort(x)[-k:])
+
+# def unique(x):
+#     """ Returns an array with no duplicates, just unique elemnts
+#         Theano.tensor.extra_ops.Unique is not implemented in GPU so we do not use it !!!!!!
+#     # Arguments
+#         x: Input tensor
+#     # Returns
+#         Array with unique elements
+#     """
+#         return
