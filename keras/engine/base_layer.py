@@ -978,6 +978,7 @@ class Layer(object):
                 the updates as conditional on these inputs.
                 If None is passed, the updates are assumed unconditional.
         """
+        print("ADD_UPDATE LLAMADO en la CAPA= " + self.name + " . STATEFUL? = " + str(self.stateful) + "\n\t >>  " + str(updates))
         if updates is None or updates == []:
             return
         # Update self.updates

@@ -42,7 +42,6 @@ theano.config.floatX = floatx()
 _LEARNING_PHASE = T.scalar(dtype='uint8', name='keras_learning_phase')  # 0 = test, 1 = train
 _UID_PREFIXES = defaultdict(int)
 
-
 def printing(x, string='', summarize=None):
     """Prints `message` and the tensor value when evaluated.
 
@@ -1485,7 +1484,7 @@ def clip(x, min_value, max_value):
     return T.clip(x, min_value, max_value)
 
 
-def equal(x, y, name=''):
+def equal(x, y):
     """Element-wise equality between two tensors.
 
     # Arguments
@@ -2521,8 +2520,6 @@ class Function(object):
         self.name = name
 
     def __call__(self, inputs):
-        # print("SELF.NAME= ", self.name)
-        # print(inputs)
         assert isinstance(inputs, (list, tuple))
         return self.function(*inputs)
 
@@ -4511,10 +4508,6 @@ def cos_similarity(a, b, axes=[-1, -1]):
     a_norm = l2_normalize(a, axis=axes[0])
     b_norm = l2_normalize(b, axis=axes[1])
 
-    # a_norm = printing(a_norm, "A_NORM= ")
-    # a_norm *= 1.
-    # b_norm = printing(b_norm, "B_NORM= ")
-    # b_norm *= 1.
     return dot(a_norm, b_norm)
 
 def nonzero(x):
@@ -4537,12 +4530,3 @@ def top_k(x, k):
     """
     return (T.sort(x)[-k:], T.argsort(x)[-k:])
 
-# def unique(x):
-#     """ Returns an array with no duplicates, just unique elemnts
-#         Theano.tensor.extra_ops.Unique is not implemented in GPU so we do not use it !!!!!!
-#     # Arguments
-#         x: Input tensor
-#     # Returns
-#         Array with unique elements
-#     """
-#         return
