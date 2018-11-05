@@ -12,7 +12,6 @@ from theano.tensor.fft import rfft, irfft
 from theano.printing import Print
 from theano.tensor.signal.conv import conv2d as vec_conv
 from theano.ifelse import ifelse
-
 try:
     import theano.sparse as th_sparse_module
 except ImportError:
@@ -39,7 +38,8 @@ py_slice = slice
 
 # INTERNAL UTILS
 theano.config.floatX = floatx()
-_LEARNING_PHASE = T.scalar(dtype='uint8', name='keras_learning_phase')  # 0 = test, 1 = train
+# 0 = test, 1 = train
+_LEARNING_PHASE = T.scalar(dtype='uint8', name='keras_learning_phase')
 _UID_PREFIXES = defaultdict(int)
 
 def printing(x, string='', summarize=None):
@@ -307,20 +307,24 @@ def is_keras_tensor(x):
         >>> np_var = numpy.array([1, 2])
         >>> K.is_keras_tensor(np_var) # A numpy array is not a symbolic tensor.
         ValueError
-        >>> k_var = K.placeholder('float32', shape=(1,1))
-        >>> K.is_keras_tensor(k_var) # A variable indirectly created outside of keras is not a Keras tensor.
+        >>> k_var = tf.placeholder('float32', shape=(1,1))
+        >>> # A variable indirectly created outside of keras is not a Keras tensor.
+        >>> K.is_keras_tensor(k_var)
         False
         >>> keras_var = K.variable(np_var)
-        >>> K.is_keras_tensor(keras_var)  # A variable created with the keras backend is not a Keras tensor.
+        >>> # A variable created with the keras backend is not a Keras tensor.
+        >>> K.is_keras_tensor(keras_var)
         False
         >>> keras_placeholder = K.placeholder(shape=(2, 4, 5))
-        >>> K.is_keras_tensor(keras_placeholder)  # A placeholder is not a Keras tensor.
+        >>> # A placeholder is not a Keras tensor.
+        >>> K.is_keras_tensor(keras_placeholder)
         False
         >>> keras_input = Input([10])
         >>> K.is_keras_tensor(keras_input) # An Input is a Keras tensor.
         True
         >>> keras_layer_output = Dense(10)(keras_input)
-        >>> K.is_keras_tensor(keras_layer_output) # Any Keras layer output is a Keras tensor.
+        >>> # Any Keras layer output is a Keras tensor.
+        >>> K.is_keras_tensor(keras_layer_output)
         True
     ```
     """
@@ -974,7 +978,10 @@ def batch_dot(x, y, axes=None):
         axes = (axes, axes)
     if axes is None:
         # behaves like tf.batch_matmul as default
-        axes = [x.ndim - 1, y.ndim - 2]
+        if y.ndim == 2:
+            axes = [x.ndim - 1, y.ndim - 1]
+        else:
+            axes = [x.ndim - 1, y.ndim - 2]
     if py_any([isinstance(a, (list, tuple)) for a in axes]):
         raise ValueError('Multiple target dimensions are not supported. ' +
                          'Expected: None, int, (int, int), ' +
@@ -982,14 +989,11 @@ def batch_dot(x, y, axes=None):
     if isinstance(axes, tuple):
         axes = list(axes)
 
-    # workaround because theano doesn't accept axes
-    # which contains the batch axis (0)
-    if axes[0] == 0:
-        x = transpose(x)
-        axes[0] = x.ndim - 1
-    if axes[1] == 0:
-        y = transpose(y)
-        axes[1] = y.ndim - 1
+    if 0 in axes:
+        raise ValueError('Can not perform batch_dot over axis 0.'
+                         'If your inputs are not batched,'
+                         ' add a dummy batch dimension to your '
+                         'inputs using K.expand_dims(x, 0)')
 
     out = T.batched_tensordot(x, y, axes=axes)
     if ndim(out) == 1:
@@ -1257,24 +1261,7 @@ def any(x, axis=None, keepdims=False):
         A uint8 tensor (0s and 1s).
     """
     y = T.any(x, axis=axis, keepdims=keepdims)
-    if hasattr(x, '_keras_shape'):
-        if axis is None:
-            y._keras_shape = (1,) * len(x._keras_shape) if keepdims else (1,)
-        else:
-            if isinstance(axis, int):
-                axis_list = [axis]
-            else:
-                axis_list = list(set(int(a) for a in axis))
-            keras_shape_list = list(x._keras_shape)
-            if keepdims:
-                for a in axis_list:
-                    keras_shape_list[a] = 1
-            else:
-                for a in axis_list[::-1]:
-                    keras_shape_list.pop(a)
-                if not keras_shape_list:
-                    keras_shape_list = (1,)
-            y._keras_shape = tuple(keras_shape_list)
+    y = _set_keras_shape_for_reduction(x, y, axis, keepdims)
     return y
 
 
@@ -1290,6 +1277,11 @@ def all(x, axis=None, keepdims=False):
         A uint8 tensor (0s and 1s).
     """
     y = T.all(x, axis=axis, keepdims=keepdims)
+    y = _set_keras_shape_for_reduction(x, y, axis, keepdims)
+    return y
+
+
+def _set_keras_shape_for_reduction(x, y, axis, keepdims):
     if hasattr(x, '_keras_shape'):
         if axis is None:
             y._keras_shape = (1,) * len(x._keras_shape) if keepdims else (1,)
@@ -1422,7 +1414,8 @@ def logsumexp(x, axis=None, keepdims=False):
     # Returns
         The reduced tensor.
     """
-    # Theano has a built-in optimization for logsumexp (see https://github.com/Theano/Theano/pull/4736)
+    # Theano has a built-in optimization for logsumexp
+    # (see https://github.com/Theano/Theano/pull/4736)
     # so we can just write the expression directly:
     return T.log(T.sum(T.exp(x), axis=axis, keepdims=keepdims))
 
@@ -1477,8 +1470,12 @@ def clip(x, min_value, max_value):
     # Returns
         A tensor.
     """
-    if max_value is not None and max_value < min_value:
-        max_value = min_value
+    if (isinstance(min_value, (int, float)) and
+            isinstance(max_value, (int, float))):
+        if max_value < min_value:
+            max_value = min_value
+    if min_value is None:
+        min_value = -np.inf
     if max_value is None:
         max_value = np.inf
     return T.clip(x, min_value, max_value)
@@ -1624,7 +1621,8 @@ def normalize_batch_in_training(x, gamma, beta,
     # TODO remove this if statement when Theano without
     # T.nnet.bn.batch_normalization_train is deprecated
     if not hasattr(T.nnet.bn, 'batch_normalization_train'):
-        return _old_normalize_batch_in_training(x, gamma, beta, reduction_axes, epsilon)
+        return _old_normalize_batch_in_training(
+            x, gamma, beta, reduction_axes, epsilon)
 
     if gamma is None:
         if beta is None:
@@ -1677,13 +1675,16 @@ def _old_normalize_batch_in_training(x, gamma, beta, reduction_axes,
         beta = zeros_like(x)
 
     dev = theano.config.device
-    use_cudnn = ndim(x) < 5 and reduction_axes == [0, 2, 3] and (dev.startswith('cuda') or dev.startswith('gpu'))
+    use_cudnn = (ndim(x) < 5 and
+                 reduction_axes == [0, 2, 3] and
+                 (dev.startswith('cuda') or dev.startswith('gpu')))
     if use_cudnn:
         broadcast_beta = beta.dimshuffle('x', 0, 'x', 'x')
         broadcast_gamma = gamma.dimshuffle('x', 0, 'x', 'x')
         try:
-            normed, mean, stdinv = theano.sandbox.cuda.dnn.dnn_batch_normalization_train(
+            trained = theano.sandbox.cuda.dnn.dnn_batch_normalization_train(
                 x, broadcast_gamma, broadcast_beta, 'spatial', epsilon)
+            normed, mean, stdinv = trained
             normed = theano.tensor.as_tensor_variable(normed)
             mean = theano.tensor.as_tensor_variable(mean)
             stdinv = theano.tensor.as_tensor_variable(stdinv)
@@ -2398,7 +2399,12 @@ def reverse(x, axes):
     """
     if isinstance(axes, int):
         axes = [axes]
-    slices = [py_slice(None, None, -1) if i in axes else py_slice(None, None, None) for i in range(x.ndim)]
+    slices = []
+    for i in range(x.ndim):
+        if i in axes:
+            slices.append(py_slice(None, None, -1))
+        else:
+            slices.append(py_slice(None, None, None))
     return x[slices]
 
 
@@ -2524,6 +2530,11 @@ class Function(object):
         return self.function(*inputs)
 
 
+def _raise_invalid_arg(key):
+    msg = 'Invalid argument "%s" passed to K.function with Theano backend' % key
+    raise ValueError(msg)
+
+
 def function(inputs, outputs, updates=[], **kwargs):
     """Return a :class:`callable object <theano.compile.function_module.Function>`
     that will calculate `outputs` from `inputs`.
@@ -2531,8 +2542,7 @@ def function(inputs, outputs, updates=[], **kwargs):
     if len(kwargs) > 0:
         for key in kwargs.keys():
             if not has_arg(theano.function, key, True):
-                msg = 'Invalid argument "%s" passed to K.function with Theano backend' % key
-                raise ValueError(msg)
+                _raise_invalid_arg(key)
     return Function(inputs, outputs, updates=updates, **kwargs)
 
 
@@ -2657,10 +2667,14 @@ def rnn(step_function, inputs, initial_states,
             outputs = T.stack(*successive_outputs)
             states = []
             for i in range(len(successive_states[-1])):
-                states.append(T.stack(*[states_at_step[i] for states_at_step in successive_states]))
+                new_states = []
+                for states_at_step in successive_states:
+                    new_states.append(states_at_step[i])
+                states.append(T.stack(*new_states))
         else:
             # build an all-zero tensor of shape (samples, output_dim)
-            initial_output = step_function(inputs[0], initial_states + constants)[0] * 0
+            initial_output = step_function(inputs[0], initial_states + constants)
+            initial_output = initial_output[0] * 0
             # Theano gets confused by broadcasting patterns in the scan op
             initial_output = T.unbroadcast(initial_output, 0, 1)
             if len(initial_states) > 0:
@@ -2711,7 +2725,8 @@ def rnn(step_function, inputs, initial_states,
             outputs = T.stack(*successive_outputs)
             states = []
             for i in range(len(successive_states[-1])):
-                states.append(T.stack(*[states_at_step[i] for states_at_step in successive_states]))
+                states.append(T.stack(
+                    *[states_at_step[i] for states_at_step in successive_states]))
 
         else:
             def _step(inputs, *states):
@@ -2878,7 +2893,7 @@ def elu(x, alpha=1.0):
     return T.nnet.elu(x, alpha)
 
 
-def relu(x, alpha=0., max_value=None):
+def relu(x, alpha=0., max_value=None, threshold=0.):
     """Rectified linear unit.
 
     With default values, it returns element-wise `max(x, 0)`.
@@ -2892,17 +2907,33 @@ def relu(x, alpha=0., max_value=None):
         A tensor.
     """
     _assert_has_capability(T.nnet, 'relu')
-    x = T.nnet.relu(x, alpha)
+
+    if alpha != 0.:
+        if threshold != 0.:
+            negative_part = T.nnet.relu(-x + threshold)
+        else:
+            negative_part = T.nnet.relu(-x)
+
+    if threshold != 0.:
+        x = x * T.cast(T.gt(x, threshold), floatx())
+    else:
+        x = T.nnet.relu(x)
+
     if max_value is not None:
-        x = T.minimum(x, max_value)
+        x = T.clip(x, 0.0, max_value)
+
+    if alpha != 0.:
+        x -= alpha * negative_part
+
     return x
 
 
 def softmax(x, axis=-1):
-    if axis == -1 or axis == x.ndim - 1:
+    if (axis == -1 or axis == x.ndim - 1) and x.ndim == 2:
         return T.nnet.softmax(x)
-    return T.exp(x - x.max()) / T.exp(
-        x - x.max()).sum(axis=axis, keepdims=True)
+    xm = x.max(axis=axis, keepdims=True)
+    return T.exp(x - xm) / T.exp(
+        x - xm).sum(axis=axis, keepdims=True)
 
 
 def softmax_3d(x):
@@ -3254,7 +3285,8 @@ def _preprocess_conv2d_depthwise_kernel(kernel, kernel_shape, data_format):
     # As of Keras 2.0.0, all kernels are normalized
     # on the format `(rows, cols, input_depth, depth)`,
     # independently of `data_format`.
-    # Theano expects `(input_depth * depth, 1, rows, cols)` for depthwise convolution.
+    # Theano expects `(input_depth * depth, 1, rows, cols)`
+    # for depthwise convolution.
     kernel = kernel[::-1, ::-1, :, :]
     kernel = kernel.dimshuffle((2, 3, 0, 1))
     kernel = reshape(kernel, kernel_shape)
@@ -3379,9 +3411,11 @@ def _postprocess_conv2d_output(conv_out, x,
                                strides, data_format):
     if padding == 'same':
         if kernel_shape[2] % 2 == 0:
-            conv_out = conv_out[:, :, :(x.shape[2] + strides[0] - 1) // strides[0], :]
+            i = (x.shape[2] + strides[0] - 1) // strides[0]
+            conv_out = conv_out[:, :, :i, :]
         if kernel_shape[3] % 2 == 0:
-            conv_out = conv_out[:, :, :, :(x.shape[3] + strides[1] - 1) // strides[1]]
+            i = (x.shape[3] + strides[1] - 1) // strides[1]
+            conv_out = conv_out[:, :, :, :i]
     if data_format == 'channels_last':
         conv_out = conv_out.dimshuffle((0, 2, 3, 1))
     return conv_out
@@ -3392,11 +3426,14 @@ def _postprocess_conv3d_output(conv_out, x,
                                strides, data_format):
     if padding == 'same':
         if kernel_shape[2] % 2 == 0:
-            conv_out = conv_out[:, :, :(x.shape[2] + strides[0] - 1) // strides[0], :, :]
+            i = (x.shape[2] + strides[0] - 1) // strides[0]
+            conv_out = conv_out[:, :, :i, :, :]
         if kernel_shape[3] % 2 == 0:
-            conv_out = conv_out[:, :, :, :(x.shape[3] + strides[1] - 1) // strides[1], :]
+            i = (x.shape[3] + strides[1] - 1) // strides[1]
+            conv_out = conv_out[:, :, :, :i, :]
         if kernel_shape[4] % 2 == 0:
-            conv_out = conv_out[:, :, :, :, :(x.shape[4] + strides[2] - 1) // strides[2]]
+            i = (x.shape[4] + strides[2] - 1) // strides[2]
+            conv_out = conv_out[:, :, :, :, :i]
     if data_format == 'channels_last':
         conv_out = conv_out.dimshuffle((0, 2, 3, 4, 1))
     return conv_out
@@ -3506,21 +3543,19 @@ def conv2d(x, kernel, strides=(1, 1), padding='valid',
 
 
 def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
-                     padding='valid', data_format=None):
-    """2D deconvolution (i.e. transposed convolution).
+                     padding='valid', data_format=None, dilation_rate=(1, 1)):
+    """2D deconvolution (transposed convolution).
 
     # Arguments
         x: Tensor or variable.
         kernel: kernel tensor.
         output_shape: 1D int tensor for the output shape.
         strides: strides tuple.
-        padding: string, `"same"` or `"valid"`.
-        data_format: string, `"channels_last"` or `"channels_first"`.
-            Whether to use Theano or TensorFlow/CNTK data format
-            for inputs/kernels/outputs.
-
-    # Returns
-        A tensor, result of transposed 2D convolution.
+        padding: string, "same" or "valid".
+        data_format: "channels_last" or "channels_first".
+            Whether to use Theano or TensorFlow data format
+            in inputs/kernels/outputs.
+        dilation_rate: tuple of 2 integers.
 
     # Raises
         ValueError: if `data_format` is neither `channels_last` or `channels_first`.
@@ -3549,11 +3584,13 @@ def conv2d_transpose(x, kernel, output_shape, strides=(1, 1),
     kernel = _preprocess_conv2d_kernel(kernel, data_format)
 
     th_padding = _preprocess_padding(padding)
-    op = T.nnet.abstract_conv.AbstractConv2d_gradInputs(imshp=None,
-                                                        kshp=kernel_shape,
-                                                        subsample=strides,
-                                                        border_mode=th_padding,
-                                                        filter_flip=not flip_filters)
+    op = T.nnet.abstract_conv.AbstractConv2d_gradInputs(
+        imshp=None,
+        kshp=kernel_shape,
+        subsample=strides,
+        border_mode=th_padding,
+        filter_flip=not flip_filters,
+        filter_dilation=dilation_rate)
     conv_out = op(kernel, x, output_shape[2:])
     conv_out = _postprocess_conv2d_output(conv_out, x, padding,
                                           kernel_shape, strides, data_format)
@@ -3578,7 +3615,8 @@ def separable_conv1d(x, depthwise_kernel, pointwise_kernel, strides=1,
         Output tensor.
 
     # Raises
-        ValueError: if `data_format` is neither `"channels_last"` or `"channels_first"`.
+        ValueError: if `data_format` is neither `"channels_last"` or
+        `"channels_first"`.
     """
     data_format = normalize_data_format(data_format)
     if isinstance(strides, int):
@@ -3599,15 +3637,20 @@ def separable_conv1d(x, depthwise_kernel, pointwise_kernel, strides=1,
     image_shape = _preprocess_conv2d_image_shape(int_shape(x), data_format)
     depthwise_kernel_shape = int_shape(depthwise_kernel)
     if depthwise_kernel_shape is None:
-        depthwise_kernel_shape = depthwise_kernel.eval().shape  # in case of a shared variable
-    depthwise_kernel_shape = _preprocess_conv2d_depthwise_filter_shape(depthwise_kernel_shape, data_format)
+        # in case of a shared variable
+        depthwise_kernel_shape = depthwise_kernel.eval().shape
+    depthwise_kernel_shape = _preprocess_conv2d_depthwise_filter_shape(
+        depthwise_kernel_shape, data_format)
     pointwise_kernel_shape = int_shape(pointwise_kernel)
     if pointwise_kernel_shape is None:
-        pointwise_kernel_shape = pointwise_kernel.eval().shape  # in case of a shared variable
-    pointwise_kernel_shape = _preprocess_conv2d_filter_shape(pointwise_kernel_shape, data_format)
+        # in case of a shared variable
+        pointwise_kernel_shape = pointwise_kernel.eval().shape
+    pointwise_kernel_shape = _preprocess_conv2d_filter_shape(
+        pointwise_kernel_shape, data_format)
 
     x = _preprocess_conv2d_input(x, data_format)
-    depthwise_kernel = _preprocess_conv2d_depthwise_kernel(depthwise_kernel, depthwise_kernel_shape, data_format)
+    depthwise_kernel = _preprocess_conv2d_depthwise_kernel(
+        depthwise_kernel, depthwise_kernel_shape, data_format)
     pointwise_kernel = _preprocess_conv2d_kernel(pointwise_kernel, data_format)
     th_padding = _preprocess_padding(padding)
 
@@ -3649,22 +3692,28 @@ def separable_conv2d(x, depthwise_kernel, pointwise_kernel, strides=(1, 1),
         Output tensor.
 
     # Raises
-        ValueError: if `data_format` is neither `"channels_last"` or `"channels_first"`.
+        ValueError: if `data_format` is neither `"channels_last"` or
+        `"channels_first"`.
     """
     data_format = normalize_data_format(data_format)
 
     image_shape = _preprocess_conv2d_image_shape(int_shape(x), data_format)
     depthwise_kernel_shape = int_shape(depthwise_kernel)
     if depthwise_kernel_shape is None:
-        depthwise_kernel_shape = depthwise_kernel.eval().shape  # in case of a shared variable
-    depthwise_kernel_shape = _preprocess_conv2d_depthwise_filter_shape(depthwise_kernel_shape, data_format)
+        # in case of a shared variable
+        depthwise_kernel_shape = depthwise_kernel.eval().shape
+    depthwise_kernel_shape = _preprocess_conv2d_depthwise_filter_shape(
+        depthwise_kernel_shape, data_format)
     pointwise_kernel_shape = int_shape(pointwise_kernel)
     if pointwise_kernel_shape is None:
-        pointwise_kernel_shape = pointwise_kernel.eval().shape  # in case of a shared variable
-    pointwise_kernel_shape = _preprocess_conv2d_filter_shape(pointwise_kernel_shape, data_format)
+        # in case of a shared variable
+        pointwise_kernel_shape = pointwise_kernel.eval().shape
+    pointwise_kernel_shape = _preprocess_conv2d_filter_shape(
+        pointwise_kernel_shape, data_format)
 
     x = _preprocess_conv2d_input(x, data_format)
-    depthwise_kernel = _preprocess_conv2d_depthwise_kernel(depthwise_kernel, depthwise_kernel_shape, data_format)
+    depthwise_kernel = _preprocess_conv2d_depthwise_kernel(
+        depthwise_kernel, depthwise_kernel_shape, data_format)
     pointwise_kernel = _preprocess_conv2d_kernel(pointwise_kernel, data_format)
     th_padding = _preprocess_padding(padding)
 
@@ -3704,18 +3753,22 @@ def depthwise_conv2d(x, depthwise_kernel, strides=(1, 1), padding='valid',
         Output tensor.
 
     # Raises
-        ValueError: if `data_format` is neither `"channels_last"` or `"channels_first"`.
+        ValueError: if `data_format` is neither `"channels_last"` or
+        `"channels_first"`.
     """
     data_format = normalize_data_format(data_format)
 
     image_shape = _preprocess_conv2d_image_shape(int_shape(x), data_format)
     depthwise_kernel_shape = int_shape(depthwise_kernel)
     if depthwise_kernel_shape is None:
-        depthwise_kernel_shape = depthwise_kernel.eval().shape  # in case of a shared variable
-    depthwise_kernel_shape = _preprocess_conv2d_depthwise_filter_shape(depthwise_kernel_shape, data_format)
+        # in case of a shared variable
+        depthwise_kernel_shape = depthwise_kernel.eval().shape
+    depthwise_kernel_shape = _preprocess_conv2d_depthwise_filter_shape(
+        depthwise_kernel_shape, data_format)
 
     x = _preprocess_conv2d_input(x, data_format)
-    depthwise_kernel = _preprocess_conv2d_depthwise_kernel(depthwise_kernel, depthwise_kernel_shape, data_format)
+    depthwise_kernel = _preprocess_conv2d_depthwise_kernel(
+        depthwise_kernel, depthwise_kernel_shape, data_format)
     th_padding = _preprocess_padding(padding)
 
     conv_out = T.nnet.conv2d(x, depthwise_kernel,
@@ -3725,8 +3778,8 @@ def depthwise_conv2d(x, depthwise_kernel, strides=(1, 1), padding='valid',
                              filter_shape=depthwise_kernel_shape,
                              filter_dilation=dilation_rate,
                              num_groups=image_shape[1])
-    conv_out = _postprocess_conv2d_output(conv_out, x, padding,
-                                          depthwise_kernel_shape, strides, data_format)
+    conv_out = _postprocess_conv2d_output(
+        conv_out, x, padding, depthwise_kernel_shape, strides, data_format)
     return conv_out
 
 
@@ -3854,8 +3907,10 @@ def pool2d(x, pool_size, strides=(1, 1), padding='valid',
     assert pool_size[0] >= 1 and pool_size[1] >= 1
 
     if padding == 'same':
-        w_pad = pool_size[0] - 2 if pool_size[0] > 2 and pool_size[0] % 2 == 1 else pool_size[0] - 1
-        h_pad = pool_size[1] - 2 if pool_size[1] > 2 and pool_size[1] % 2 == 1 else pool_size[1] - 1
+        odd_pad_w = pool_size[0] > 2 and pool_size[0] % 2 == 1
+        w_pad = pool_size[0] - 2 if odd_pad_w else pool_size[0] - 1
+        odd_pad_h = pool_size[1] > 2 and pool_size[1] % 2 == 1
+        h_pad = pool_size[1] - 2 if odd_pad_h else pool_size[1] - 1
         pad = (w_pad, h_pad)
     elif padding == 'valid':
         pad = (0, 0)
@@ -4229,7 +4284,8 @@ def ctc_update_log_p(skip_idxs, zeros, active, log_p_curr, log_p_prev):
     # previous transitions
     _p_prev = T.inc_subtensor(_p_prev[1:], _p_prev[:-1])
     # skip transitions
-    _p_prev = T.inc_subtensor(_p_prev[active_skip_idxs + 2], p_prev[active_skip_idxs])
+    _p_prev = T.inc_subtensor(
+        _p_prev[active_skip_idxs + 2], p_prev[active_skip_idxs])
     updated_log_p_prev = T.log(_p_prev) + common_factor
 
     log_p_next = T.set_subtensor(
@@ -4240,24 +4296,30 @@ def ctc_update_log_p(skip_idxs, zeros, active, log_p_curr, log_p_prev):
 
 
 def ctc_path_probs(predict, Y, alpha=1e-4):
-    smoothed_predict = (1 - alpha) * predict[:, Y] + alpha * np.float32(1.) / Y.shape[0]
-    L = T.log(smoothed_predict)
+    smoothed = (1 - alpha) * predict[:, Y] + alpha * np.float32(1.) / Y.shape[0]
+    L = T.log(smoothed)
     zeros = T.zeros_like(L[0])
     log_first = zeros
 
     f_skip_idxs = ctc_create_skip_idxs(Y)
-    b_skip_idxs = ctc_create_skip_idxs(Y[::-1])  # there should be a shortcut to calculating this
+    # there should be a shortcut to calculating this
+    b_skip_idxs = ctc_create_skip_idxs(Y[::-1])
 
     def step(log_f_curr, log_b_curr, f_active, log_f_prev, b_active, log_b_prev):
-        f_active_next, log_f_next = ctc_update_log_p(f_skip_idxs, zeros, f_active, log_f_curr, log_f_prev)
-        b_active_next, log_b_next = ctc_update_log_p(b_skip_idxs, zeros, b_active, log_b_curr, log_b_prev)
+        f_active_next, log_f_next = ctc_update_log_p(
+            f_skip_idxs, zeros, f_active, log_f_curr, log_f_prev)
+        b_active_next, log_b_next = ctc_update_log_p(
+            b_skip_idxs, zeros, b_active, log_b_curr, log_b_prev)
         return f_active_next, log_f_next, b_active_next, log_b_next
 
     [f_active, log_f_probs, b_active, log_b_probs], _ = theano.scan(
-        step, sequences=[L, L[::-1, ::-1]], outputs_info=[np.int32(1), log_first, np.int32(1), log_first])
+        step,
+        sequences=[L, L[::-1, ::-1]],
+        outputs_info=[np.int32(1), log_first, np.int32(1), log_first])
 
     idxs = T.arange(L.shape[1]).dimshuffle('x', 0)
-    mask = (idxs < f_active.dimshuffle(0, 'x')) & (idxs < b_active.dimshuffle(0, 'x'))[::-1, ::-1]
+    mask = ((idxs < f_active.dimshuffle(0, 'x')) &
+            (idxs < b_active.dimshuffle(0, 'x'))[::-1, ::-1])
     log_probs = log_f_probs + log_b_probs[::-1, ::-1] - L
     return log_probs, mask
 
@@ -4265,7 +4327,8 @@ def ctc_path_probs(predict, Y, alpha=1e-4):
 def ctc_cost(predict, Y):
     log_probs, mask = ctc_path_probs(predict, ctc_interleave_blanks(Y))
     common_factor = T.max(log_probs)
-    total_log_prob = T.log(T.sum(T.exp(log_probs - common_factor)[mask.nonzero()])) + common_factor
+    total_log_prob = T.log(T.sum(T.exp(log_probs - common_factor)[mask.nonzero()]))
+    total_log_prob = total_log_prob + common_factor
     return -total_log_prob
 
 
@@ -4274,14 +4337,13 @@ def ctc_batch_cost(y_true, y_pred, input_length, label_length):
     """Runs CTC loss algorithm on each batch element.
 
     # Arguments
-        y_true: tensor `(samples, max_string_length)`
-            containing the truth labels.
-        y_pred: tensor `(samples, time_steps, num_categories)`
-            containing the prediction, or output of the softmax.
-        input_length: tensor `(samples, 1)` containing the sequence length for
-            each batch item in `y_pred`.
-        label_length: tensor `(samples, 1)` containing the sequence length for
-            each batch item in `y_true`.
+        y_true: tensor (samples, max_string_length) containing the truth labels
+        y_pred: tensor (samples, time_steps, num_categories) containing the
+                prediction, or output of the softmax
+        input_length: tensor (samples,1) containing the sequence length for
+                each batch item in y_pred
+        label_length: tensor (samples,1) containing the sequence length for
+                each batch item in y_true
 
     # Returns
         Tensor with shape (samples,1) containing the
@@ -4403,7 +4465,12 @@ def local_conv1d(inputs, kernel, kernel_size, strides, data_format=None):
     return permute_dimensions(output, (1, 0, 2))
 
 
-def local_conv2d(inputs, kernel, kernel_size, strides, output_shape, data_format=None):
+def local_conv2d(inputs,
+                 kernel,
+                 kernel_size,
+                 strides,
+                 output_shape,
+                 data_format=None):
     """Apply 2D conv with un-shared weights.
 
     # Arguments

@@ -364,7 +364,8 @@ class RMSprop(Optimizer):
         decay: float >= 0. Learning rate decay over each update.
 
     # References
-        - [rmsprop: Divide the gradient by a running average of its recent magnitude](http://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf)
+        - [rmsprop: Divide the gradient by a running average of its recent magnitude
+           ](http://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf)
     """
 
     def __init__(self, lr=0.001, rho=0.9, epsilon=None, decay=0.,
@@ -431,7 +432,8 @@ class Adagrad(Optimizer):
         decay: float >= 0. Learning rate decay over each update.
 
     # References
-        - [Adaptive Subgradient Methods for Online Learning and Stochastic Optimization](http://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf)
+        - [Adaptive Subgradient Methods for Online Learning and Stochastic
+           Optimization](http://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf)
     """
 
     def __init__(self, lr=0.01, epsilon=None, decay=0., **kwargs):
@@ -507,7 +509,8 @@ class Adadelta(Optimizer):
         decay: float >= 0. Initial learning rate decay.
 
     # References
-        - [Adadelta - an adaptive learning rate method](http://arxiv.org/abs/1212.5701)
+        - [Adadelta - an adaptive learning rate method](
+           https://arxiv.org/abs/1212.5701)
     """
 
     def __init__(self, lr=1.0, rho=0.95, epsilon=None, decay=0.,
@@ -582,8 +585,10 @@ class Adam(Optimizer):
             Beyond".
 
     # References
-        - [Adam - A Method for Stochastic Optimization](http://arxiv.org/abs/1412.6980v8)
-        - [On the Convergence of Adam and Beyond](https://openreview.net/forum?id=ryQu7f-RZ)
+        - [Adam - A Method for Stochastic Optimization](
+           https://arxiv.org/abs/1412.6980v8)
+        - [On the Convergence of Adam and Beyond](
+           https://openreview.net/forum?id=ryQu7f-RZ)
     """
 
     def __init__(self, lr=0.001, beta_1=0.9, beta_2=0.999,
@@ -655,6 +660,105 @@ class Adam(Optimizer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class AdamAccumulate(Optimizer):
+    """Adam optimizer updating parameters only after a number of iterations.
+    Implementation made by: https://github.com/keras-team/keras/issues/3556#issuecomment-417317758
+    Default parameters follow those provided in the original paper.
+
+    # Arguments
+        lr: float >= 0. Learning rate.
+        beta_1: float, 0 < beta < 1. Generally close to 1.
+        beta_2: float, 0 < beta < 1. Generally close to 1.
+        epsilon: float >= 0. Fuzz factor. If `None`, defaults to `K.epsilon()`.
+        decay: float >= 0. Learning rate decay over each update.
+        amsgrad: boolean. Whether to apply the AMSGrad variant of this
+            algorithm from the paper "On the Convergence of Adam and
+            Beyond".
+        accum_iters: int > 0. Number of iteration between gradient updates.
+            If 1, the optimizer falls to regular Adam.
+
+    # References
+        - [Adam - A Method for Stochastic Optimization](
+           https://arxiv.org/abs/1412.6980v8)
+        - [On the Convergence of Adam and Beyond](
+           https://openreview.net/forum?id=ryQu7f-RZ)
+    """
+    def __init__(self, lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.,
+                 amsgrad=False, accum_iters=20, **kwargs):
+        super(AdamAccumulate, self).__init__(**kwargs)
+        with K.name_scope(self.__class__.__name__):
+            self.iterations = K.variable(0, dtype='int64', name='iterations')
+            self.lr = K.variable(lr, name='lr')
+            self.beta_1 = K.variable(beta_1, name='beta_1')
+            self.beta_2 = K.variable(beta_2, name='beta_2')
+            self.decay = K.variable(decay, name='decay')
+        if epsilon is None:
+            epsilon = K.epsilon()
+        self.epsilon = epsilon
+        self.initial_decay = decay
+        self.amsgrad = amsgrad
+        self.accum_iters = K.variable(accum_iters, dtype='int64')
+
+    @interfaces.legacy_get_updates_support
+    def get_updates(self, loss, params, learning_rate_multipliers):
+        grads = self.get_gradients(loss, params)
+        self.updates = [K.update_add(self.iterations, 1)]
+        lr = self.lr
+        if self.initial_decay > 0:
+            lr = lr * (1. / (1. + self.decay * K.cast(self.iterations,
+                                                      K.dtype(self.decay))))
+
+        t = K.cast(self.iterations, K.floatx()) + 1
+        lr_t = lr * (K.sqrt(1. - K.pow(self.beta_2, t)) /
+                     (1. - K.pow(self.beta_1, t)))
+
+        ms = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
+        vs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
+        gs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
+
+        if self.amsgrad:
+            vhats = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
+        else:
+            vhats = [K.zeros(1) for _ in params]
+        self.weights = [self.iterations] + ms + vs + vhats
+
+        for p, g, m, v, vhat, gg in zip(params, grads, ms, vs, vhats, gs):
+
+            update_gradients = K.cast(K.equal(self.iterations % self.accum_iters, 0), K.floatx())
+            gg_t = (1 - update_gradients) * (gg + g)
+            m_t = (self.beta_1 * m) + (1. - self.beta_1) * (gg + update_gradients * g) / K.cast(self.accum_iters, K.floatx())
+            v_t = (self.beta_2 * v) + (1. - self.beta_2) * K.square((gg + update_gradients * g) / K.cast(self.accum_iters, K.floatx()))
+            if self.amsgrad:
+                vhat_t = K.maximum(vhat, v_t)
+                p_t = p - lr_t * m_t / (K.sqrt(vhat_t) + self.epsilon)
+                self.updates.append(K.update(vhat, vhat_t))
+            else:
+                p_t = p - lr_t * m_t / (K.sqrt(v_t) + self.epsilon)
+
+            self.updates.append((m, update_gradients * m_t + (1 - update_gradients) * m))
+            self.updates.append((v, update_gradients * v_t + (1 - update_gradients) * v))
+            self.updates.append((gg, gg_t))
+            new_p = p_t
+
+            # Apply constraints.
+            if getattr(p, 'constraint', None) is not None:
+                new_p = p.constraint(new_p)
+
+            self.updates.append(K.update(p, new_p))
+        return self.updates
+
+    def get_config(self):
+        config = {'lr': float(K.get_value(self.lr)),
+                  'beta_1': float(K.get_value(self.beta_1)),
+                  'beta_2': float(K.get_value(self.beta_2)),
+                  'decay': float(K.get_value(self.decay)),
+                  'epsilon': self.epsilon,
+                  'amsgrad': self.amsgrad,
+                  'accum_iters': float(K.get_value(self.accum_iters))}
+        base_config = super(AdamAccumulate, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 class Adamax(Optimizer):
     """Adamax optimizer from Adam paper's Section 7.
 
@@ -668,7 +772,8 @@ class Adamax(Optimizer):
         decay: float >= 0. Learning rate decay over each update.
 
     # References
-        - [Adam - A Method for Stochastic Optimization](http://arxiv.org/abs/1412.6980v8)
+        - [Adam - A Method for Stochastic Optimization](
+           https://arxiv.org/abs/1412.6980v8)
     """
 
     def __init__(self, lr=0.002, beta_1=0.9, beta_2=0.999,
@@ -749,7 +854,8 @@ class Nadam(Optimizer):
 
     # References
         - [Nadam report](http://cs229.stanford.edu/proj2015/054_report.pdf)
-        - [On the importance of initialization and momentum in deep learning](http://www.cs.toronto.edu/~fritz/absps/momentum.pdf)
+        - [On the importance of initialization and momentum in deep learning](
+           http://www.cs.toronto.edu/~fritz/absps/momentum.pdf)
     """
 
     def __init__(self, lr=0.002, beta_1=0.9, beta_2=0.999,
@@ -774,10 +880,10 @@ class Nadam(Optimizer):
         t = K.cast(self.iterations, K.floatx()) + 1
 
         # Due to the recommendations in [2], i.e. warming momentum schedule
-        momentum_cache_t = self.beta_1 * (
-            1. - 0.5 * (K.pow(K.cast_to_floatx(0.96), t * self.schedule_decay)))
-        momentum_cache_t_1 = self.beta_1 * (
-            1. - 0.5 * (K.pow(K.cast_to_floatx(0.96), (t + 1) * self.schedule_decay)))
+        momentum_cache_t = self.beta_1 * (1. - 0.5 * (
+            K.pow(K.cast_to_floatx(0.96), t * self.schedule_decay)))
+        momentum_cache_t_1 = self.beta_1 * (1. - 0.5 * (
+            K.pow(K.cast_to_floatx(0.96), (t + 1) * self.schedule_decay)))
         m_schedule_new = self.m_schedule * momentum_cache_t
         m_schedule_next = self.m_schedule * momentum_cache_t * momentum_cache_t_1
         self.updates.append((self.m_schedule, m_schedule_new))
@@ -795,7 +901,8 @@ class Nadam(Optimizer):
             m_t_prime = m_t / (1. - m_schedule_next)
             v_t = self.beta_2 * v + (1. - self.beta_2) * K.square(g)
             v_t_prime = v_t / (1. - K.pow(self.beta_2, t))
-            m_t_bar = (1. - momentum_cache_t) * g_prime + momentum_cache_t_1 * m_t_prime
+            m_t_bar = (1. - momentum_cache_t) * g_prime + (
+                momentum_cache_t_1 * m_t_prime)
 
             self.updates.append(K.update(m, m_t))
             self.updates.append(K.update(v, v_t))
@@ -856,6 +963,7 @@ rmsprop = RMSprop
 adagrad = Adagrad
 adadelta = Adadelta
 adam = Adam
+adamaccumulate = AdamAccumulate
 adamax = Adamax
 nadam = Nadam
 

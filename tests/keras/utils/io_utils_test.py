@@ -1,20 +1,22 @@
 '''Tests for functions in io_utils.py.
 '''
 import os
-import sys
 import pytest
 from keras.models import Sequential
 from keras.layers import Dense
 from keras.utils.io_utils import HDF5Matrix
+from keras.utils.io_utils import H5Dict
 from keras.utils.io_utils import ask_to_proceed_with_overwrite
+from numpy.testing import assert_allclose
 import numpy as np
 import six
-import warnings
 import h5py
-
+import tempfile
 try:
+    from pathlib import Path
     from unittest.mock import patch
 except:
+    from pathlib2 import Path
     from mock import patch
 
 
@@ -45,7 +47,7 @@ def test_io_utils(in_tmpdir):
     '''Tests the HDF5Matrix code using the sample from @jfsantos at
     https://gist.github.com/jfsantos/e2ef822c744357a4ed16ec0c885100a3
     '''
-    h5_path = 'test.h5'
+    _, h5_path = tempfile.mkstemp('.h5')
     create_dataset(h5_path)
 
     # Instantiating HDF5Matrix for the training set,
@@ -132,6 +134,102 @@ def test_ask_to_proceed_with_overwrite():
 
         mock.return_value = 'n'
         assert not ask_to_proceed_with_overwrite('/tmp/not_exists')
+
+
+def test_H5Dict_attrs():
+    _, h5_path = tempfile.mkstemp('.h5')
+
+    # test both HDF5 and dict implementations
+    paths = [h5_path, dict()]
+
+    for path in paths:
+        f = H5Dict(path, mode='w')
+
+        # str
+        f['x'] = 'abcd'
+        f['x2'] = u'abcd'
+
+        # list<bytes>
+        f['y'] = [b'efg', b'hij', b'klmn']
+        f['y2'] = (b'asd', b'sdf', b'dfg')
+
+        # ndarray
+        array = np.random.random((4, 5, 512))
+        f['z'] = array
+
+        f.close()
+        del f
+
+        f = H5Dict(path, mode='r')
+
+        assert f['x'] == 'abcd'
+        assert f['x2'] == u'abcd'
+        assert f['y'] == [b'efg', b'hij', b'klmn']
+        assert list(f['y2']) == [b'asd', b'sdf', b'dfg']
+        assert_allclose(f['z'], array)
+
+        f.close()
+    os.remove(h5_path)
+
+
+def test_H5Dict_groups():
+    _, h5_path = tempfile.mkstemp('.h5')
+
+    # test both HDF5 and dict implementations
+    paths = [h5_path, dict()]
+
+    for path in paths:
+        f = H5Dict(path, mode='w')
+
+        group1 = f['group1']
+        group2 = group1['group2']
+
+        group2['x'] = 'abcd'
+
+        group3 = group2['group3']
+        group3['y'] = [b'efg', b'hij', b'klmn']
+
+        group4 = group3['group4']
+        array = np.random.random((4, 5, 512))
+        group4['z'] = array
+
+        f.close()
+
+        f = H5Dict(path, mode='r')
+
+        assert 'group1' in f
+        group1 = f['group1']
+
+        assert 'group2' in group1
+        group2 = group1['group2']
+        assert group2['x'] == 'abcd'
+
+        assert 'group3' in group2
+        group3 = group2['group3']
+        assert group3['y'] == [b'efg', b'hij', b'klmn']
+
+        assert 'group4' in group3
+        group4 = group3['group4']
+        assert_allclose(group4['z'], array)
+
+        f.close()
+    os.remove(h5_path)
+
+
+def test_H5Dict_accepts_pathlib_Path():
+    """GitHub issue: 11459"""
+    _, h5_path = tempfile.mkstemp('.h5')
+
+    f = H5Dict(Path(h5_path), mode='w')
+    f['x'] = 'abcd'
+    f.close()
+    del f
+
+    f = H5Dict(Path(h5_path), mode='r')
+    assert f['x'] == 'abcd'
+    f.close()
+
+    os.remove(h5_path)
 
 
 if __name__ == '__main__':

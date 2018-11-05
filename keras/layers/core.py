@@ -95,9 +95,9 @@ class Dropout(Layer):
         seed: A Python integer to use as random seed.
 
     # References
-        - [Dropout: A Simple Way to Prevent Neural Networks from Overfitting](http://www.cs.toronto.edu/~rsalakhu/papers/srivastava14a.pdf)
+        - [Dropout: A Simple Way to Prevent Neural Networks from Overfitting](
+           http://www.jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf)
     """
-
     @interfaces.legacy_dropout_support
     def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
         super(Dropout, self).__init__(**kwargs)
@@ -122,7 +122,6 @@ class Dropout(Layer):
             def dropped_inputs():
                 return K.dropout(inputs, self.rate, noise_shape,
                                  seed=self.seed)
-
             return K.in_train_phase(dropped_inputs, inputs,
                                     training=training)
         return inputs
@@ -205,7 +204,8 @@ class SpatialDropout1D(Dropout):
         Same as input
 
     # References
-        - [Efficient Object Localization Using Convolutional Networks](https://arxiv.org/abs/1411.4280)
+        - [Efficient Object Localization Using Convolutional Networks](
+           https://arxiv.org/abs/1411.4280)
     """
 
     @interfaces.legacy_spatialdropout1d_support
@@ -250,7 +250,8 @@ class SpatialDropout2D(Dropout):
         Same as input
 
     # References
-        - [Efficient Object Localization Using Convolutional Networks](https://arxiv.org/abs/1411.4280)
+        - [Efficient Object Localization Using Convolutional Networks](
+           https://arxiv.org/abs/1411.4280)
     """
 
     @interfaces.legacy_spatialdropoutNd_support
@@ -298,7 +299,8 @@ class SpatialDropout3D(Dropout):
         Same as input
 
     # References
-        - [Efficient Object Localization Using Convolutional Networks](https://arxiv.org/abs/1411.4280)
+        - [Efficient Object Localization Using Convolutional Networks](
+           https://arxiv.org/abs/1411.4280)
     """
 
     @interfaces.legacy_spatialdropoutNd_support
@@ -714,10 +716,30 @@ class Lambda(Layer):
         model.add(Lambda(antirectifier,
                          output_shape=antirectifier_output_shape))
     ```
+    ```python
+        # add a layer that returns the hadamard product
+        # and sum of it from two input tensors
+
+        def hadamard_product_sum(tensors):
+            out1 = tensors[0] * tensors[1]
+            out2 = K.sum(out1, axis=-1)
+            return [out1, out2]
+
+        def hadamard_product_sum_output_shape(input_shapes):
+            shape1 = list(input_shapes[0])
+            shape2 = list(input_shapes[1])
+            assert shape1 == shape2  # else hadamard product isn't possible
+            return [tuple(shape1), tuple(shape2[:-1])]
+
+        x1 = Dense(32)(input_1)
+        x2 = Dense(32)(input_2)
+        layer = Lambda(hadamard_product_sum, hadamard_product_sum_output_shape)
+        x_hadamard, x_sum = layer([x1, x2])
+    ```
 
     # Arguments
         function: The function to be evaluated.
-            Takes input tensor as first argument.
+            Takes input tensor or list of tensors as first argument.
         output_shape: Expected output shape from function.
             Only relevant when using Theano.
             Can be a tuple or function.
@@ -799,7 +821,8 @@ class Lambda(Layer):
         else:
             shape = self._output_shape(input_shape)
             if not isinstance(shape, (list, tuple)):
-                raise ValueError('`output_shape` function must return a tuple or a list of tuples.')
+                raise ValueError('`output_shape` function must return a tuple or '
+                                 'a list of tuples.')
             if isinstance(shape, list):
                 if isinstance(shape[0], int) or shape[0] is None:
                     shape = tuple(shape)
@@ -1035,7 +1058,8 @@ class Dense(Layer):
             'bias_initializer': initializers.serialize(self.bias_initializer),
             'kernel_regularizer': regularizers.serialize(self.kernel_regularizer),
             'bias_regularizer': regularizers.serialize(self.bias_regularizer),
-            'activity_regularizer': regularizers.serialize(self.activity_regularizer),
+            'activity_regularizer':
+                regularizers.serialize(self.activity_regularizer),
             'kernel_constraint': constraints.serialize(self.kernel_constraint),
             'bias_constraint': constraints.serialize(self.bias_constraint)
         }
@@ -1152,6 +1176,40 @@ class MaskedMean(Layer):
         return dict(list(base_config.items()))
 
 
+class ApplyMask(Layer):
+    """
+    This layer is called after an Embedding layer.
+    It averages all of the masked-out embeddings.
+    The mask is discarded.
+
+    # Input shape
+        Arbitrary. Use the keyword argument `input_shape`
+        when using this layer as the first layer in a model.
+
+    # Output shape
+        Same shape as input.
+    """
+
+    def __init__(self, **kwargs):
+        self.supports_masking = True
+        super(ApplyMask, self).__init__(**kwargs)
+
+    def call(self, inputs, mask=None):
+        mask = inputs[1]
+        inputs = inputs[0]
+        return K.cast(mask[:, :, None], K.dtype(inputs)) * inputs
+
+    def compute_mask(self, inputs, mask=None):
+        return inputs[1]
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0]
+
+    def get_config(self):
+        base_config = super(ApplyMask, self).get_config()
+        return dict(list(base_config.items()))
+
+
 class MaskLayer(Layer):
     """Applies to the input its mask. The mask is kept.
 
@@ -1178,6 +1236,79 @@ class MaskLayer(Layer):
 
     def get_config(self):
         base_config = super(MaskLayer, self).get_config()
+        return dict(list(base_config.items()))
+
+
+class MaskAndRemoveMask(Layer):
+    """Applies to the input its mask. The mask is removed.
+
+    # Input shape
+        Arbitrary. Use the keyword argument `input_shape`
+        when using this layer as the first layer in a model.
+
+    # Output shape
+        Same shape as input.
+    """
+
+    def __init__(self, **kwargs):
+        self.supports_masking = True
+        super(MaskAndRemoveMask, self).__init__(**kwargs)
+
+    def call(self, inputs, mask=None):
+        return K.cast(mask[:, :, None], K.dtype(inputs)) * inputs
+
+    def compute_mask(self, input_shape, input_mask=None):
+        return None
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        base_config = super(MaskAndRemoveMask, self).get_config()
+        return dict(list(base_config.items()))
+
+
+class RemoveMask(Layer):
+    """Removes the mask of the Layer.
+    """
+
+    def __init__(self, **kwargs):
+        super(RemoveMask, self).__init__(**kwargs)
+
+    def compute_mask(self, input, input_mask=None):
+        return None
+
+    def get_config(self):
+        base_config = super(RemoveMask, self).get_config()
+        return dict(list(base_config.items()))
+
+
+class GetMask(Layer):
+    """Gets the mask of a layer.
+
+    # Input shape
+        Arbitrary. Use the keyword argument `input_shape`
+        when using this layer as the first layer in a model.
+
+    # Output shape
+        Same shape as input.
+    """
+
+    def __init__(self, **kwargs):
+        self.supports_masking = True
+        super(GetMask, self).__init__(**kwargs)
+
+    def call(self, inputs, mask=None):
+        return mask
+
+    def compute_mask(self, input_shape, input_mask=None):
+        return None
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        base_config = super(GetMask, self).get_config()
         return dict(list(base_config.items()))
 
 
@@ -1428,21 +1559,6 @@ class SetSubtensor(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class RemoveMask(Layer):
-    """Removes the mask of the Layer.
-    """
-
-    def __init__(self, **kwargs):
-        super(RemoveMask, self).__init__(**kwargs)
-
-    def compute_mask(self, input, input_mask=None):
-        return None
-
-    def get_config(self):
-        base_config = super(RemoveMask, self).get_config()
-        return dict(list(base_config.items()))
-
-
 class ZeroesLayer(Layer):
     """Given any input, produces an output input_dim zeroes
 
@@ -1479,9 +1595,9 @@ class ZeroesLayer(Layer):
 
     def call(self, inputs, mask=None):
         initial_state = K.zeros_like(inputs)  # (samples, input_dim)
-        initial_state = K.sum(initial_state, axis=1)  # (samples, )
+        initial_state = K.sum(initial_state, axis=(1,))  # (samples,)
         initial_state = K.expand_dims(initial_state)  # (samples, 1)
-        initial_state = K.tile(initial_state, self.output_dim)  # (samples, units)
+        initial_state = K.tile(initial_state, [1, self.output_dim])
         return initial_state
 
     def compute_output_shape(self, input_shape):
