@@ -2282,18 +2282,20 @@ class CacheLayer(Layer):
     def build(self, input_shape):
         assert len(input_shape) == 2
         self.input_dim = input_shape[0][-1]
+
         # Create internal tensor to act like cache
         self.cache_train = K.variable(np.zeros(shape=(self.size, self.input_dim)), name='cache_train')
-        # Create internal tensor to act like cache
         self.cache_val = K.variable(np.zeros(shape=(self.size, self.input_dim)), name='cache_val')
-        self.time_train = K.ones(shape=(self.size,), name='time_train')  # Create tensor to date the updates
-        self.time_val = K.ones(shape=(self.size,), name='time_val')  # Create tensor to date the updates
+        # Create tensor to date the updates
+        self.time_train = K.ones(shape=(self.size,), name='time_train')
+        self.time_val = K.ones(shape=(self.size,), name='time_val')
         # Create tensor to know the associated word (by index)
         self.words_train = K.variable(K.ones(shape=(self.size,), dtype='int64') * -1,
                                       dtype='int64', name='words_train')
         # Create tensor to know the associated word (by index)
         self.words_val = K.variable(K.ones(shape=(self.size,), dtype='int64') * -1,
                                     dtype='int64', name='words_val')
+
         self.tmp_tensor = K.zeros(shape=(self.max_idx_words, self.input_dim))
         self.counter = K.variable(0, dtype='int64', name='counter')
         self.kernel = self.add_weight(shape=(self.input_dim * 2, self.input_dim),
@@ -2301,6 +2303,19 @@ class CacheLayer(Layer):
                                       name='kernel',
                                       regularizer=self.kernel_regularizer,
                                       constraint=self.kernel_constraint)
+
+        self.kernel_input = self.add_weight(shape=(self.input_dim,),
+                                      initializer=self.kernel_initializer,
+                                      name='kernel_input',
+                                      regularizer=self.kernel_regularizer,
+                                      constraint=self.kernel_constraint)
+
+        self.kernel_output = self.add_weight(shape=(self.input_dim,),
+                                            initializer=self.kernel_initializer,
+                                            name='kernel_output',
+                                            regularizer=self.kernel_regularizer,
+                                            constraint=self.kernel_constraint)
+
         if self.use_bias:
             self.bias = self.add_weight(shape=(self.input_dim,),
                                         initializer=self.bias_initializer,
@@ -2430,6 +2445,8 @@ class CacheLayer(Layer):
         word = inputs[1]    # Batch x Timesteps
         word = K.expand_dims(word, axis=-1)  # Batch x Timesteps x 1
 
+        # value = K.printing(value, "VALUE==== \n")
+        # value *= 1.
         # Get tensors to use
         training = K.learning_phase()
 
@@ -2445,9 +2462,9 @@ class CacheLayer(Layer):
         time_to_use = K.in_train_phase(self.time_train, self.time_val, training=training)
         words_to_use = K.in_train_phase(self.words_train, self.words_val, training=training)
 
-        # words_to_use = K.printing(words_to_use, 'ENTRADA_words_to_use')
-        # cache_to_use = K.printing(cache_to_use, 'ENTRADA_cache_to_use')
-        # time_to_use = K.printing(time_to_use, 'ENTRADA_time_to_use')
+        # words_to_use = K.printing(words_to_use, 'ENTRADA_words_to_use\n')
+        # cache_to_use = K.printing(cache_to_use, 'ENTRADA_cache_to_use\n')
+        # time_to_use = K.printing(time_to_use, 'ENTRADA_time_to_use\n')
 
         # Get output from cache
         out_cache = self.get_output_cache([value, cache_to_use])
@@ -2501,30 +2518,38 @@ class CacheLayer(Layer):
         updates.append((self.words_val, upd_words_val))
 
         # Set tmp_tensor to zeros again
-        # self.tmp_tensor = K.zeros_like(self.tmp_tensor)  # Try removing this line
+        self.tmp_tensor = K.zeros_like(self.tmp_tensor)  # Try removing this line
+
 
         # Check if the counter is bigger than the threshold to actually use the cache
         use_cache = K.switch(K.greater(self.counter, self.cache_patience), K.ones_like(value),
                              K.zeros_like(value) + K.abs(-1 + training))
+        # use_cache = K.printing(use_cache, "USE_CACHE====== \n")
 
         # Compute output vector
         intermediate_out = K.dot(K.concatenate([value, out_cache], axis=-1), self.kernel)
         intermediate_out = K.bias_add(intermediate_out, self.bias)
         intermediate_out = K.tanh(intermediate_out)
-        out = intermediate_out * use_cache + value  # Sum original input as a residual connection.
+
+        # Compute dynamic weight for mixing outs
+        aux1 = self.kernel_input * value
+        aux2 = self.kernel_output * intermediate_out
+        dynamic_weight = K.sigmoid(aux1 + aux2) * use_cache
+        # dynamic_weight = K.printing(dynamic_weight, "DYNAMIC= \n")
+        # dynamic_weight *= 1.0
+
+        # Compute out
+        out =  dynamic_weight * (intermediate_out * use_cache) + (1 - dynamic_weight) * value  # Sum original input as a residual connection.
 
         # Call updates to take effect each time we receive an input
-
-        # print("adding updates:", updates, "to layer")
         self.add_update(updates)
 
-
-        # words_to_use = K.printing(words_to_use, 'LAST_words_to_use')
-        # cache_to_use = K.printing(cache_to_use, 'LAST_cache_to_use')
-        # time_to_use = K.printing(time_to_use, 'LAST_time_to_use')
+        # words_to_use = K.printing(words_to_use, 'LAST_words_to_use\n')
+        # cache_to_use = K.printing(cache_to_use, 'LAST_cache_to_use\n')
+        # time_to_use = K.printing(time_to_use, 'LAST_time_to_use\n')
 
         # Return output
-        # out = K.printing(out, 'OUT====== ')
+        # out = K.printing(out, 'OUT====== \n')
         return out
 
     def compute_mask(self, input_shape, input_mask=None):
